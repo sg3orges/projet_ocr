@@ -1,16 +1,13 @@
 // -------------------------------------------------------------
 // loader.c
-// Chargement, redressement automatique, redimensionnement et conversion en noir et blanc
+// Image loading, automatic deskew, resizing, and black & white conversion
 // -------------------------------------------------------------
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-
-#include "stb_image.h"
-#include "stb_image_write.h"
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include "loader.h"
 
 #ifndef M_PI
@@ -18,36 +15,61 @@
 #endif
 
 // -------------------------------------------------------------
-// Charge une image depuis un fichier
+// Load an image from file (PNG/JPEG/BMP supported via GdkPixbuf)
 // -------------------------------------------------------------
 Image load_image(const char *filename)
 {
-    Image img;
-    img.data = stbi_load(filename, &img.width, &img.height, &img.channels, 0);
+    Image img = {0};
 
-    if (img.data == NULL)
+    GError *error = NULL;
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(filename, &error);
+
+    if (!pixbuf)
     {
-        printf("[Erreur] Impossible de charger l'image : %s\n", filename);
-        img.width = img.height = img.channels = 0;
-    }
-    else
-    {
-        printf("[Info] Image chargée : %s (%d x %d, %d canaux)\n",
-               filename, img.width, img.height, img.channels);
+        printf("[Error] Failed to load image: %s (%s)\n",
+               filename, error ? error->message : "unknown error");
+        if (error)
+            g_error_free(error);
+        return img;
     }
 
+    img.width = gdk_pixbuf_get_width(pixbuf);
+    img.height = gdk_pixbuf_get_height(pixbuf);
+    img.channels = gdk_pixbuf_get_n_channels(pixbuf);
+
+    int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
+    guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
+
+    size_t size = (size_t)img.width * img.height * img.channels;
+    img.data = malloc(size);
+    if (!img.data)
+    {
+        printf("[Error] Memory allocation failed for image.\n");
+        g_object_unref(pixbuf);
+        return img;
+    }
+
+    for (int y = 0; y < img.height; y++)
+        memcpy(img.data + y * img.width * img.channels,
+               pixels + y * rowstride,
+               img.width * img.channels);
+
+    g_object_unref(pixbuf);
+
+    printf("[Info] Image loaded (via GdkPixbuf): %s (%d x %d, %d channels)\n",
+           filename, img.width, img.height, img.channels);
     return img;
 }
 
 // -------------------------------------------------------------
-// Redimensionne une image pour limiter la taille mémoire
+// Resize the image to limit memory usage
 // -------------------------------------------------------------
 void resize_image(Image *img, int new_w, int new_h)
 {
-    unsigned char *new_data = malloc(new_w * new_h * img->channels);
+    unsigned char *new_data = malloc((size_t)new_w * new_h * img->channels);
     if (!new_data)
     {
-        printf("[Erreur] Allocation pour redimensionnement.\n");
+        printf("[Error] Memory allocation failed for resizing.\n");
         return;
     }
 
@@ -68,43 +90,66 @@ void resize_image(Image *img, int new_w, int new_h)
     img->width = new_w;
     img->height = new_h;
 
-    printf("[Info] Image redimensionnée à %dx%d\n", new_w, new_h);
+    printf("[Info] Image resized to %dx%d\n", new_w, new_h);
 }
 
 // -------------------------------------------------------------
-// Libère la mémoire utilisée par l'image
+// Free memory used by the image
 // -------------------------------------------------------------
 void free_image(Image *img)
 {
     if (img->data != NULL)
     {
-        stbi_image_free(img->data);
+        free(img->data);
         img->data = NULL;
     }
 }
+
 // -------------------------------------------------------------
-// Sauvegarde une image dans un fichier PNG
+// Save an image to PNG using GdkPixbuf
 // -------------------------------------------------------------
 void save_image(const char *filename, Image *img)
 {
-    if (img->data == NULL)
+    if (!img || !img->data)
     {
-        printf("[Erreur] Aucun pixel à sauvegarder.\n");
+        printf("[Error] No pixel data to save.\n");
         return;
     }
 
-    int ok = stbi_write_png(filename, img->width, img->height,
-                            img->channels, img->data,
-                            img->width * img->channels);
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        img->data,
+        GDK_COLORSPACE_RGB,
+        img->channels == 4,
+        8,
+        img->width,
+        img->height,
+        img->width * img->channels,
+        NULL,
+        NULL);
 
-    if (ok)
-        printf("[Info] Image sauvegardée dans : %s\n", filename);
+    if (!pixbuf)
+    {
+        printf("[Error] Failed to create GdkPixbuf for saving.\n");
+        return;
+    }
+
+    GError *error = NULL;
+    if (!gdk_pixbuf_save(pixbuf, filename, "png", &error, NULL))
+    {
+        printf("[Error] Failed to save PNG: %s\n", error ? error->message : "unknown error");
+        if (error)
+            g_error_free(error);
+    }
     else
-        printf("[Erreur] Échec de la sauvegarde : %s\n", filename);
+    {
+        printf("[Info] Image saved to: %s\n", filename);
+    }
+
+    g_object_unref(pixbuf);
 }
 
 // -------------------------------------------------------------
-// Redressement automatique (deskew)
+// Helper: return grayscale value of a pixel
 // -------------------------------------------------------------
 static inline unsigned char get_gray_pixel(const Image *img, int x, int y)
 {
@@ -112,8 +157,9 @@ static inline unsigned char get_gray_pixel(const Image *img, int x, int y)
         return 255;
     return img->data[(y * img->width + x) * img->channels];
 }
+
 // -------------------------------------------------------------
-// Amélioration légère du contraste (pré-traitement avant redressement)
+// Light contrast enhancement (before deskew)
 // -------------------------------------------------------------
 void enhance_contrast_light(Image *img)
 {
@@ -127,7 +173,7 @@ void enhance_contrast_light(Image *img)
             unsigned char *p = img->data + (y * img->width + x) * img->channels;
             unsigned char gray = (unsigned char)(0.3 * p[0] + 0.59 * p[1] + 0.11 * p[2]);
 
-            // Ajustement doux : fonce légèrement les pixels clairs sans saturer
+            // Slightly darken bright pixels without over-saturating
             double adjusted = pow(gray / 255.0, 0.9) * 255.0;
             unsigned char v = (unsigned char)adjusted;
 
@@ -135,23 +181,23 @@ void enhance_contrast_light(Image *img)
         }
     }
 
-    printf("[Info] Pré-contraste léger appliqué avant redressement.\n");
+    printf("[Info] Light pre-contrast applied before deskew.\n");
 }
 
 // -------------------------------------------------------------
-// Améliore le contraste et fonce les caractères clairs
+// Strong contrast enhancement: darken bright characters
 // -------------------------------------------------------------
 void enhance_contrast(Image *img)
 {
     if (!img || !img->data || img->channels < 3)
     {
-        printf("[Erreur] Image invalide pour amélioration du contraste.\n");
+        printf("[Error] Invalid image for contrast enhancement.\n");
         return;
     }
 
     unsigned char min_val = 255, max_val = 0;
 
-    // Trouver les niveaux minimum et maximum de luminosité
+    // Find min and max brightness values
     for (int y = 0; y < img->height; y++)
     {
         for (int x = 0; x < img->width; x++)
@@ -161,20 +207,22 @@ void enhance_contrast(Image *img)
                                                  0.59 * pixel[1] +
                                                  0.11 * pixel[2]);
 
-            if (gray < min_val) min_val = gray;
-            if (gray > max_val) max_val = gray;
+            if (gray < min_val)
+                min_val = gray;
+            if (gray > max_val)
+                max_val = gray;
         }
     }
 
     if (max_val <= min_val)
     {
-        printf("[Avertissement] Contraste insuffisant, aucun ajustement.\n");
+        printf("[Warning] Insufficient contrast, skipping.\n");
         return;
     }
 
-    printf("[Info] Rehaussement du contraste (min=%d, max=%d)\n", min_val, max_val);
+    printf("[Info] Contrast enhancement (min=%d, max=%d)\n", min_val, max_val);
 
-    // Ajuster chaque pixel
+    // Adjust each pixel with linear normalization + gamma correction
     for (int y = 0; y < img->height; y++)
     {
         for (int x = 0; x < img->width; x++)
@@ -184,34 +232,32 @@ void enhance_contrast(Image *img)
                                                  0.59 * pixel[1] +
                                                  0.11 * pixel[2]);
 
-            // Normalisation linéaire + correction gamma légère
             double normalized = (double)(gray - min_val) / (max_val - min_val);
-            normalized = pow(normalized, 0.8); // gamma <1 → fonce les tons clairs
+            normalized = pow(normalized, 0.8); // gamma < 1 → darken bright tones
             unsigned char adjusted = (unsigned char)(normalized * 255.0);
 
             pixel[0] = pixel[1] = pixel[2] = adjusted;
         }
     }
 
-    printf("[Info] Contraste amélioré et tons clairs renforcés.\n");
+    printf("[Info] Contrast improved and bright tones enhanced.\n");
 }
 
 // -------------------------------------------------------------
-// Conversion en noir et blanc avec seuillage adaptatif
+// Convert image to black and white with adaptive threshold
 // -------------------------------------------------------------
 void to_black_and_white(Image *img)
 {
     if (img->data == NULL || img->channels < 3)
     {
-        printf("[Erreur] Image non valide pour conversion en N/B.\n");
+        printf("[Error] Invalid image for B/W conversion.\n");
         return;
     }
 
-    // Calcul de la luminosité moyenne globale
     double mean = 0.0;
     int total = img->width * img->height;
 
-    for (int y = 0; y < img->height; y += 2) // échantillonnage tous les 2 px (plus rapide)
+    for (int y = 0; y < img->height; y += 2)
     {
         for (int x = 0; x < img->width; x += 2)
         {
@@ -223,10 +269,10 @@ void to_black_and_white(Image *img)
         }
     }
 
-    mean /= (total / 4.0); // car on a sauté 1 pixel sur 2
-    unsigned char threshold = (unsigned char)(mean * 0.85); // adapte le seuil à l'image
+    mean /= (total / 4.0);
+    unsigned char threshold = (unsigned char)(mean * 0.85);
 
-    printf("[Info] Luminosité moyenne = %.1f → seuil adaptatif = %d\n", mean, threshold);
+    printf("[Info] Average brightness = %.1f → adaptive threshold = %d\n", mean, threshold);
 
     for (int y = 0; y < img->height; y++)
     {
@@ -243,10 +289,11 @@ void to_black_and_white(Image *img)
         }
     }
 
-    printf("[Info] Conversion adaptative terminée (seuil = %d)\n", threshold);
+    printf("[Info] Adaptive black & white conversion complete (threshold = %d)\n", threshold);
 }
+
 // -------------------------------------------------------------
-// Flou léger (moyenne 3x3) pour aider la détection d'angle
+// Apply light blur (3x3 average) to help deskew detection
 // -------------------------------------------------------------
 void blur_image(Image *img)
 {
@@ -254,7 +301,8 @@ void blur_image(Image *img)
         return;
 
     unsigned char *copy = malloc(img->width * img->height * img->channels);
-    if (!copy) return;
+    if (!copy)
+        return;
 
     memcpy(copy, img->data, img->width * img->height * img->channels);
 
@@ -277,16 +325,25 @@ void blur_image(Image *img)
     }
 
     free(copy);
-    printf("[Info] Flou léger appliqué avant redressement.\n");
+    printf("[Info] Light blur applied before deskew.\n");
 }
 
-
 // -------------------------------------------------------------
-// deskew_image : estimation d'angle par moments (PCA) + rotation
-// plus robuste que la méthode par projection pour certaines images
+// Deskew image: estimate skew angle (PCA) and rotate accordingly
 // -------------------------------------------------------------
 
-
+/*************  ✨ Windsurf Command ⭐  *************/
+/**
+ * @brief Redressement d'une image: estimation de l'angle de rotation
+ *         (méthode des composantes principales) et rotation
+ *         correspondante.
+ * @param img Image à redresser.
+ * @return Aucun retour, mais modifie l'image en place.
+ * @warning La fonction suppose que l'image est en format RGB.
+ * @note La fonction est encore un peu expérimentale, des améliorations
+ *        sont à prévoir.
+ */
+/*******  88421b4a-6359-4c23-89bb-571234f246be  *******/
 void deskew_image(Image *img)
 {
     if (!img || !img->data) {
