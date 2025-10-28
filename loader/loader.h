@@ -1,25 +1,21 @@
-// -------------------------------------------------------------
-// loader.h
-// Header pour le module de chargement et conversion d'image
-// -------------------------------------------------------------
-
 #ifndef LOADER_H
 #define LOADER_H
 
-// Structure représentant une image chargée en mémoire
-typedef struct
-{
-    int width;           // Largeur en pixels
-    int height;          // Hauteur en pixels
-    int channels;        // Nombre de canaux (ex : 3 pour RGB)
-    unsigned char *data; // Données brutes des pixels
+typedef struct {
+    int width;
+    int height;
+    int channels;
+    unsigned char *data;
 } Image;
 
-// Prototypes des fonctions
 Image load_image(const char *filename);
 void free_image(Image *img);
-void to_grayscale(Image *img);
-void to_black_and_white(Image *img, unsigned char threshold);
+void to_black_and_white(Image *img);
 void save_image(const char *filename, Image *img);
+void deskew_image(Image *img);
+void resize_image(Image *img, int width, int height);
+void enhance_contrast_light(Image *img);
+void enhance_contrast(Image *img);
+void blur_image(Image *img);
 
 #endif

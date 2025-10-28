@@ -1,14 +1,22 @@
+# loader/Makefile
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99
-OBJ = main.o loader.o
+OBJ = loader.o main.o
+EXEC = loader_test
 
-all: loader_test
+all: $(EXEC)
 
-loader_test: $(OBJ)
-	$(CC) $(CFLAGS) -o loader_test $(OBJ) -lm
+$(EXEC): $(OBJ)
+	$(CC) $(CFLAGS) -o $(EXEC) $(OBJ) -lm
 
-main.o: main.c loader.h
-loader.o: loader.c loader.h stb_image.h stb_image_write.h
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o loader_test
+	@echo "🧹 Nettoyage du dossier loader..."
+	rm -f *.o $(EXEC)
+	rm -f images/*.png images/*.jpg images/*.jpeg images/*.bmp
+	rm -f last_image.txt
+	@echo "🗑️  Fichiers et images supprimés dans loader/"
+
+.PHONY: all clean
