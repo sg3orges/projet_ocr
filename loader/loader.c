@@ -332,18 +332,6 @@ void blur_image(Image *img)
 // Deskew image: estimate skew angle (PCA) and rotate accordingly
 // -------------------------------------------------------------
 
-/*************  ✨ Windsurf Command ⭐  *************/
-/**
- * @brief Redressement d'une image: estimation de l'angle de rotation
- *         (méthode des composantes principales) et rotation
- *         correspondante.
- * @param img Image à redresser.
- * @return Aucun retour, mais modifie l'image en place.
- * @warning La fonction suppose que l'image est en format RGB.
- * @note La fonction est encore un peu expérimentale, des améliorations
- *        sont à prévoir.
- */
-/*******  88421b4a-6359-4c23-89bb-571234f246be  *******/
 void deskew_image(Image *img)
 {
     if (!img || !img->data) {
