@@ -3,7 +3,7 @@
 
 #include <gtk/gtk.h>
 
-// Fonction principale qui lance l'interface graphique
+// Main function that launches the graphical interface
 void run_gui(int argc, char *argv[]);
 
 #endif

@@ -148,15 +148,6 @@ void save_image(const char *filename, Image *img)
     g_object_unref(pixbuf);
 }
 
-// -------------------------------------------------------------
-// Helper: return grayscale value of a pixel
-// -------------------------------------------------------------
-static inline unsigned char get_gray_pixel(const Image *img, int x, int y)
-{
-    if (x < 0 || y < 0 || x >= img->width || y >= img->height)
-        return 255;
-    return img->data[(y * img->width + x) * img->channels];
-}
 
 // -------------------------------------------------------------
 // Light contrast enhancement (before deskew)
@@ -327,15 +318,13 @@ void blur_image(Image *img)
     free(copy);
     printf("[Info] Light blur applied before deskew.\n");
 }
-
 // -------------------------------------------------------------
 // Deskew image: estimate skew angle (PCA) and rotate accordingly
 // -------------------------------------------------------------
-
 void deskew_image(Image *img)
 {
     if (!img || !img->data) {
-        printf("[Erreur] Image invalide pour redressement.\n");
+        printf("[Error] Invalid image for deskewing.\n");
         return;
     }
 
@@ -343,17 +332,17 @@ void deskew_image(Image *img)
     const int H = img->height;
 
     if ((long long)W * H > 40000000LL) {
-        printf("[Avertissement] Image très grande (%dx%d), redressement ignoré.\n", W, H);
+        printf("[Warning] Very large image (%dx%d), deskew ignored.\n", W, H);
         return;
     }
 
     unsigned char *bin = malloc((size_t)W * H);
     if (!bin) {
-        printf("[Erreur] Allocation mémoire (bin)\n");
+        printf("[Error] Memory allocation failed (bin).\n");
         return;
     }
 
-    // --- Calcul de la luminosité moyenne ---
+    // --- Compute average brightness ---
     double mean = 0.0;
     int samples = 0;
     for (int y = 0; y < H; y += 2) {
@@ -382,12 +371,12 @@ void deskew_image(Image *img)
     printf("[Debug] deskew: mean=%.1f thr=%.1f black_pixels=%lld\n", mean, thr, black_count);
 
     if (black_count < (W * H) / 10000 + 50) {
-        printf("[Info] Pas assez de pixels noirs pour estimer angle.\n");
+        printf("[Info] Not enough black pixels to estimate skew angle.\n");
         free(bin);
         return;
     }
 
-    // --- Calcul du centre et des moments ---
+    // --- Compute centroid and moments ---
     double sum_x = 0, sum_y = 0, cnt = 0;
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x)
@@ -415,27 +404,27 @@ void deskew_image(Image *img)
     s_yy /= cnt;
     s_xy /= cnt;
 
-    // --- Calcul de l’angle principal ---
+    // --- Compute main angle ---
     double theta = 0.5 * atan2(2.0 * s_xy, s_xx - s_yy);
     double angle_deg = theta * 180.0 / M_PI;
 
-    // --- Amplification empirique ---
-    double amplified_angle = angle_deg * 1.85; // 🔥 augmente légèrement la correction
+    // --- Empirical amplification ---
+    double amplified_angle = angle_deg * 1.85; // 🔥 slightly increase correction
     double rot = -amplified_angle;
 
-    printf("[Info] Angle brut = %.2f°, amplifié = %.2f°, rotation = %.2f°\n",
+    printf("[Info] Raw angle = %.2f°, amplified = %.2f°, rotation = %.2f°\n",
            angle_deg, amplified_angle, rot);
 
     if (fabs(rot) < 0.15) {
-        printf("[Info] Angle négligeable (%.3f°), pas de rotation.\n", rot);
+        printf("[Info] Negligible angle (%.3f°), no rotation applied.\n", rot);
         free(bin);
         return;
     }
 
-    // --- Rotation de l'image ---
+    // --- Rotate the image ---
     unsigned char *newdata = malloc((size_t)W * H * img->channels);
     if (!newdata) {
-        printf("[Erreur] Allocation (newdata)\n");
+        printf("[Error] Memory allocation failed (newdata).\n");
         free(bin);
         return;
     }
@@ -465,5 +454,5 @@ void deskew_image(Image *img)
     img->data = newdata;
     free(bin);
 
-    printf("[OK] Image redressée (rotation %.2f°)\n", rot);
+    printf("[OK] Image deskewed (rotation %.2f°)\n", rot);
 }

@@ -8,75 +8,75 @@ int main(void)
 {
     char image_name[128] = {0};
 
-    // Lecture du nom de fichier à traiter
+    // Read the filename to process
     FILE *f = fopen("last_image.txt", "r");
     if (!f)
     {
-        printf("[Erreur] Impossible d’ouvrir last_image.txt\n");
+        printf("[Error] Cannot open last_image.txt\n");
         return 1;
     }
 
     if (!fgets(image_name, sizeof(image_name), f))
     {
-        printf("[Erreur] Aucun nom d’image trouvé.\n");
+        printf("[Error] No image name found.\n");
         fclose(f);
         return 1;
     }
     fclose(f);
 
-    // Supprimer le saut de ligne si présent
+    // Remove newline if present
     image_name[strcspn(image_name, "\n")] = '\0';
 
-    // Construire le chemin complet
+    // Construct full path
     char image_path[256];
     snprintf(image_path, sizeof(image_path), "images/%s", image_name);
 
-    printf("[Info] Chargement de l’image : %s\n", image_path);
+    printf("[Info] Loading image: %s\n", image_path);
 
-    // Charger l'image
+    // Load the image
     Image img = load_image(image_path);
     if (img.data == NULL)
     {
-        printf("[Erreur] Impossible de charger l’image.\n");
+        printf("[Error] Failed to load image.\n");
         return 1;
     }
+
     if (img.width > 1600 || img.height > 1600)
-    resize_image(&img, 1200, 900);
+        resize_image(&img, 1200, 900);
 
-// 🔹 Étape 1 : petit contraste avant le redressement
-enhance_contrast_light(&img);
+    // 🔹 Step 1: light contrast before deskew
+    enhance_contrast_light(&img);
 
-// 🔹 Étape 2 : blurring
-blur_image(&img);
+    // 🔹 Step 2: apply blur
+    blur_image(&img);
 
-// 🔹 Étape 2 : redressement
-deskew_image(&img);
+    // 🔹 Step 3: deskew
+    deskew_image(&img);
 
-// 🔹 Étape 3 : vrai contraste fort après redressement
-enhance_contrast(&img);
+    // 🔹 Step 4: strong contrast after deskew
+    enhance_contrast(&img);
 
-// 🔹 Étape 4 : conversion finale noir et blanc
-to_black_and_white(&img);
+    // 🔹 Step 5: final black & white conversion
+    to_black_and_white(&img);
 
-
-    // Sauvegarde du résultat
+    // Save the result
     char output_path[256];
     snprintf(output_path, sizeof(output_path), "images/%s_bw.png", image_name);
     save_image(output_path, &img);
 
-    // Supprimer l'image originale
+    // Delete original image
     if (remove(image_path) == 0)
-        printf("[Info] Image originale supprimée : %s\n", image_path);
+        printf("[Info] Original image deleted: %s\n", image_path);
     else
-        printf("[Avertissement] Impossible de supprimer l’image originale.\n");
+        printf("[Warning] Cannot delete original image.\n");
 
-    // Supprimer le fichier last_image.txt pour ne pas retraiter la même
+    // Delete last_image.txt to avoid reprocessing
     if (remove("last_image.txt") == 0)
-        printf("[Info] Fichier last_image.txt supprimé.\n");
+        printf("[Info] last_image.txt deleted.\n");
 
-    // Libérer la mémoire
+    // Free memory
     free_image(&img);
 
-    printf("[OK] Traitement terminé avec succès : %s\n", output_path);
+    printf("[OK] Processing completed successfully: %s\n", output_path);
     return 0;
 }

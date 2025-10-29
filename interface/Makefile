@@ -8,7 +8,7 @@ EXEC = interface_app
 all: loader_build $(EXEC)
 
 $(EXEC): $(OBJ)
-	$(CC) $(CFLAGS) -o $(EXEC) $(OBJ) $(LIBS)
+	$(CC) $(CFLAGS) -o $(EXEC) $(OBJ) $(LIBS) -lm
 
 loader_build:
 	@echo "🔧 Compilation du module loader..."
