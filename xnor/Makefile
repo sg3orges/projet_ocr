@@ -1,6 +1,6 @@
-TARGET = xor
+TARGET = xnor
 
-SRC = xor.c
+SRC = xnor.c
 
 CC = gcc
 

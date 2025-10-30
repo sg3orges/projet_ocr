@@ -20,7 +20,7 @@ void clear_screen()
 int main() 
 {
     double input[4][2] = {{0,0}, {0,1}, {1,0}, {1,1}};
-    double output[4] = {0, 1, 1, 0};
+    double output[4] = {1, 0, 0, 1};
 
     // PARAMÈTRES 
     double learning_rate = 0.8;
