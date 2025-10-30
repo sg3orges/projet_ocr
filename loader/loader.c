@@ -409,7 +409,7 @@ void deskew_image(Image *img)
     double angle_deg = theta * 180.0 / M_PI;
 
     // --- Empirical amplification ---
-    double amplified_angle = angle_deg * 1.85; // 🔥 slightly increase correction
+    double amplified_angle = angle_deg * 1.85; // slightly increase correction
     double rot = -amplified_angle;
 
     printf("[Info] Raw angle = %.2f°, amplified = %.2f°, rotation = %.2f°\n",

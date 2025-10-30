@@ -11,11 +11,11 @@ $(EXEC): $(OBJ)
 	$(CC) $(CFLAGS) -o $(EXEC) $(OBJ) $(LIBS) -lm
 
 loader_build:
-	@echo "🔧 Compilation du module loader..."
+	@echo "Compilation du module loader..."
 	$(MAKE) -C ../loader all
 
 clean:
-	@echo "🧹 Nettoyage du module interface et loader..."
+	@echo "Nettoyage du module interface et loader..."
 	rm -f *.o $(EXEC)
 	$(MAKE) -C ../loader clean
 

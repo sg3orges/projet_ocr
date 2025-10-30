@@ -263,9 +263,9 @@ void run_gui(int argc, char *argv[])
 
     // Buttons
     GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    GtkWidget *btn_load = gtk_button_new_with_label("📁 Load Image");
-    GtkWidget *btn_save = gtk_button_new_with_label("💾 Save Rotation");
-    GtkWidget *btn_quit = gtk_button_new_with_label("❌ Quit");
+    GtkWidget *btn_load = gtk_button_new_with_label("Load Image");
+    GtkWidget *btn_save = gtk_button_new_with_label("Save Rotation");
+    GtkWidget *btn_quit = gtk_button_new_with_label("Quit");
 
     gtk_box_pack_start(GTK_BOX(hbox), btn_load, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(hbox), btn_save, TRUE, TRUE, 0);
