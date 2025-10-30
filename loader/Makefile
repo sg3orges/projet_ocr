@@ -16,22 +16,22 @@ EXEC = loader_test
 all: $(EXEC)
 
 $(EXEC): $(OBJ)
-	@echo "🔧 Linking $(EXEC)..."
+	@echo "Linking $(EXEC)..."
 	$(CC) $(CFLAGS) -o $(EXEC) $(OBJ) $(LDFLAGS)
-	@echo "✅ Build complete!"
+	@echo "Build complete!"
 
 %.o: %.c
-	@echo "📦 Compiling $<..."
+	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # -------------------------------------------------------------
 # Clean target: remove objects, executables, and generated images
 # -------------------------------------------------------------
 clean:
-	@echo "🧹 Cleaning loader directory..."
+	@echo "Cleaning loader directory..."
 	rm -f *.o $(EXEC)
 	rm -f images/*.png images/*.jpg images/*.jpeg images/*.bmp
 	rm -f last_image.txt
-	@echo "🗑️  Objects, executables, and images deleted from loader/"
+	@echo " Objects, executables, and images deleted from loader/"
 
 .PHONY: all clean
