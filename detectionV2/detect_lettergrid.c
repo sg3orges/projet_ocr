@@ -1,13 +1,12 @@
-// detect_lettergrid.c — version simple (GTK3)
-// 1) Estime la taille d'une case (cell_w, cell_h) via profils lissés.
-// 2) Tuilage régulier de la zone de grille et dessin d'un carré centré par case.
-
+// detect_lettergrid.c — version simple + export des cases (GTK3)
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
-/* ================== utils pixels ================== */
+/* ============== utils pixels & dessin ============== */
 static inline guint8 get_gray(GdkPixbuf *pix,int x,int y){
     int n=gdk_pixbuf_get_n_channels(pix), rs=gdk_pixbuf_get_rowstride(pix);
     guchar *p=gdk_pixbuf_get_pixels(pix)+y*rs+x*n;
@@ -37,7 +36,7 @@ static void draw_rect_thick(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     for(int k=0;k<t;k++) draw_rect(pix,x0-k,y0-k,x1+k,y1+k,R,G,B);
 }
 
-/* ================== profils sur la zone ================== */
+/* ============== profils sur la zone ============== */
 static double* col_black_ratio(GdkPixbuf *pix, guint8 thr,
                                int gx0,int gx1,int gy0,int gy1){
     int W=gdk_pixbuf_get_width(pix), H=gdk_pixbuf_get_height(pix);
@@ -65,26 +64,26 @@ static double* row_black_ratio(GdkPixbuf *pix, guint8 thr,
     return r;
 }
 
-/* lissage boîte (fenêtre impaire recommandée) */
+/* lissage boîte */
 static void smooth_box(double *a, int n, int k){
     if(!a || n<=0 || k<=1) return;
-    if(!(k&1)) k++;  // force impaire
+    if(!(k&1)) k++;  // impaire
     int r=k/2; double acc=0.0;
     for(int i=0;i<=r;i++) acc+=a[i];
     for(int i=0;i<n;i++){
-        int L = (i-r<0)?0:(i-r);
-        int R = (i+r>=n)?(n-1):(i+r);
+        int L=(i-r<0)?0:(i-r);
+        int R=(i+r>=n)?(n-1):(i+r);
         if(i==0){ acc=0.0; for(int j=L;j<=R;j++) acc+=a[j]; }
         else{
-            int Lprev = (i-1-r<0)?0:(i-1-r);
-            int Rprev = (i-1+r>=n)?(n-1):(i-1+r);
-            acc += a[R] - a[Lprev];
+            int Lprev=(i-1-r<0)?0:(i-1-r);
+            int Rprev=(i-1+r>=n)?(n-1):(i-1+r);
+            acc += a[R]-a[Lprev];
         }
-        a[i] = acc / (double)(R-L+1);
+        a[i]=acc/(double)(R-L+1);
     }
 }
 
-/* Trouve des "composants" au-dessus d'un seuil → centres de pics */
+/* composants (pics) */
 typedef struct { int start, end; } Interval;
 
 static int find_components(const double *arr,int n,double thr,int gap_min,
@@ -98,7 +97,7 @@ static int find_components(const double *arr,int n,double thr,int gap_min,
     return cnt;
 }
 
-/* médiane des gaps entre centres */
+/* médiane des gaps entre centres (taille de case) */
 static double median_gap_from_intervals(const Interval *iv, int niv){
     if(niv < 2) return 0.0;
     int m = niv - 1;
@@ -115,68 +114,70 @@ static double median_gap_from_intervals(const Interval *iv, int niv){
     return med;
 }
 
-/* ================== API ================== */
+/* mkdir si nécessaire */
+static int ensure_dir(const char *path){
+    struct stat st;
+    if(stat(path,&st)==0) return S_ISDIR(st.st_mode)?0:-1;
+    return mkdir(path,0755);
+}
+
+/* ============== API ============== */
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
                             guint8 black_thr,
                             guint8 R,guint8 G,guint8 B)
 {
-    /* 1) Profils limités à la zone de la grille */
+    /* 1) Profils limités à la zone */
     double *vr = col_black_ratio(img, black_thr, gx0,gx1, gy0,gy1);
     double *hr = row_black_ratio(img, black_thr, gx0,gx1, gy0,gy1);
     if(!vr || !hr){ free(vr); free(hr); return; }
 
     int nX = gx1-gx0+1, nY = gy1-gy0+1;
 
-    /* 2) Lissage (réduit l'influence des lettres) */
+    /* 2) Lissage */
     int wv = nX/100; if(wv<3) wv=3; if(!(wv&1)) wv++;
     int wh = nY/100; if(wh<3) wh=3; if(!(wh&1)) wh++;
     smooth_box(vr, nX, wv);
     smooth_box(hr, nY, wh);
 
-    /* 3) Seuil relatif et composants (pics ~ lignes de la grille) */
+    /* 3) Composants & estimation du pas (taille de case) */
     double meanX=0, meanY=0;
     for(int i=0;i<nX;i++) meanX+=vr[i]; meanX/=nX;
     for(int j=0;j<nY;j++) meanY+=hr[j]; meanY/=nY;
 
-    /* facteur 1.6: robuste pour isoler des traits foncés */
-    double thrX = 1.6*meanX, thrY = 1.6*meanY;
-
     Interval *ivX = malloc(sizeof(Interval)*nX);
     Interval *ivY = malloc(sizeof(Interval)*nY);
-    int nIvX = find_components(vr, nX, thrX, 6, ivX);
-    int nIvY = find_components(hr, nY, thrY, 6, ivY);
+    int nIvX = find_components(vr, nX, 1.6*meanX, 6, ivX);
+    int nIvY = find_components(hr, nY, 1.6*meanY, 6, ivY);
 
-    /* 4) Estimation de la taille des cases par médiane des écarts */
-    double cw_d = median_gap_from_intervals(ivX, nIvX);
-    double ch_d = median_gap_from_intervals(ivY, nIvY);
+    int cell_w = (int)llround(median_gap_from_intervals(ivX, nIvX));
+    int cell_h = (int)llround(median_gap_from_intervals(ivY, nIvY));
+
     free(vr); free(hr); free(ivX); free(ivY);
 
-    int cell_w = (int)llround(cw_d);
-    int cell_h = (int)llround(ch_d);
-
-    /* garde-fous : fallback si pas assez de pics détectés */
-    if(cell_w < 2) cell_w = (nX>0) ? nX/20 : 8;  // valeur douce
-    if(cell_h < 2) cell_h = (nY>0) ? nY/20 : 8;
-
+    if(cell_w < 2) cell_w = (nX>0)? nX/20 : 8;
+    if(cell_h < 2) cell_h = (nY>0)? nY/20 : 8;
     if(cell_w < 2) cell_w = 8;
     if(cell_h < 2) cell_h = 8;
 
-    /* 5) Tuilage régulier de la zone et dessin */
+    /* 4) Tuilage régulier */
     int gridW = gx1 - gx0 + 1;
     int gridH = gy1 - gy0 + 1;
-
     int cols = (int)llround((double)gridW / (double)cell_w);
     int rows = (int)llround((double)gridH / (double)cell_h);
     if(cols < 1) cols = 1;
     if(rows < 1) rows = 1;
 
-    /* pas effectif pour couvrir EXACTEMENT la zone */
     double stepX = (double)gridW / (double)cols;
     double stepY = (double)gridH / (double)rows;
 
-    const int border_margin = 2;     // rester à l’intérieur du cadre rouge/vert
-    const double inner_frac  = 0.55; // carré “lettre” = 55% du côté
+    const int border_margin = 2;   // rester à l’intérieur du cadre rouge/vert
+
+    /* 5) Dossier de sortie + export PNG */
+    const char *outdir = "cells";  // change le nom si tu veux
+    if(ensure_dir(outdir) != 0){
+        fprintf(stderr, "[warn] impossible de créer le dossier '%s'\n", outdir);
+    }
 
     for(int r=0; r<rows; r++){
         int y0 = (int)llround(gy0 + r*stepY)     + border_margin;
@@ -188,22 +189,28 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
             int x1 = (int)llround(gx0 + (c+1)*stepX) - 1 - border_margin;
             if(x1 - x0 < 3) continue;
 
-            /* cadre de case (couleur R,G,B passée par l'appelant) */
+            /* dessine SEULEMENT le grand cadre bleu sur l'image d'affichage */
             draw_rect_thick(disp, x0,y0,x1,y1, R,G,B,2);
 
-            /* carré bleu centré (zone lettre) */
-            int cw = x1 - x0 + 1, ch = y1 - y0 + 1;
-            int side = (int)llround(inner_frac * (cw < ch ? cw : ch));
-            int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-            int ix0 = cx - side/2, iy0 = cy - side/2;
-            int ix1 = ix0 + side - 1, iy1 = iy0 + side - 1;
-            draw_rect_thick(disp, ix0,iy0,ix1,iy1, 0,128,255,2);
+            /* export de la case croppée depuis l'image source (sans tracés) */
+            int w = x1 - x0 + 1, h = y1 - y0 + 1;
+            if(w>1 && h>1){
+                GdkPixbuf *sub = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, w, h);
+                gdk_pixbuf_copy_area(img, x0, y0, w, h, sub, 0, 0);
+
+                char path[512];
+                snprintf(path, sizeof(path), "%s/cell_r%03d_c%03d.png", outdir, r, c);
+                if(!gdk_pixbuf_save(sub, path, "png", NULL, NULL)){
+                    fprintf(stderr, "[warn] sauvegarde échouée: %s\n", path);
+                }
+                g_object_unref(sub);
+            }
         }
     }
 
-    /* (facultatif) log de debug
-    fprintf(stderr,"[grid] cell_w=%d, cell_h=%d, cols=%d, rows=%d\n",
-            cell_w, cell_h, cols, rows);
+    /* log optionnel
+    fprintf(stderr,"[grid] cell_w=%d, cell_h=%d, cols=%d, rows=%d -> dossiers: %s\n",
+            cell_w, cell_h, cols, rows, outdir);
     */
 }
 
