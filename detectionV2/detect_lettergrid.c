@@ -1,4 +1,5 @@
-// detect_lettergrid.c — version simple + export des cases (GTK3)
+// detect_lettergrid.c — GTK3 (simple + autocorr + export PNG de chaque case)
+
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <math.h>
@@ -64,12 +65,12 @@ static double* row_black_ratio(GdkPixbuf *pix, guint8 thr,
     return r;
 }
 
-/* lissage boîte */
+/* lissage boîte (fenêtre impaire) */
 static void smooth_box(double *a, int n, int k){
     if(!a || n<=0 || k<=1) return;
-    if(!(k&1)) k++;  // impaire
+    if(!(k&1)) k++;
     int r=k/2; double acc=0.0;
-    for(int i=0;i<=r;i++) acc+=a[i];
+    for(int i=0;i<=r && i<n;i++) acc+=a[i];
     for(int i=0;i<n;i++){
         int L=(i-r<0)?0:(i-r);
         int R=(i+r>=n)?(n-1):(i+r);
@@ -83,134 +84,129 @@ static void smooth_box(double *a, int n, int k){
     }
 }
 
-/* composants (pics) */
-typedef struct { int start, end; } Interval;
-
-static int find_components(const double *arr,int n,double thr,int gap_min,
-                           Interval *out){
-    int cnt=0,in=0,start=0,last=-1;
-    for(int i=0;i<n;i++){
-        if(arr[i]>thr){ if(!in){in=1; start=i;} last=i; }
-        else if(in && (i-last)>gap_min){ out[cnt++] = (Interval){start,last}; in=0; }
+/* ============== estimation du pas par autocorr ============== */
+static int best_lag_autocorr(const double *p, int n, int lag_min, int lag_max){
+    if(n<=0 || lag_min>=lag_max) return 0;
+    double mean=0.0; for(int i=0;i<n;i++) mean+=p[i]; mean/= (n>0?n:1);
+    double best=-1e300; int bestLag=lag_min;
+    for(int k=lag_min; k<=lag_max; k++){
+        double acc=0.0;
+        for(int i=0; i+k<n; i++){
+            double a = p[i]-mean;
+            double b = p[i+k]-mean;
+            acc += a*b;
+        }
+        if(acc > best){ best = acc; bestLag = k; }
     }
-    if(in) out[cnt++] = (Interval){start,last};
-    return cnt;
+    return bestLag;
+}
+static void lag_bounds_from_extent(int extent, int *lag_min, int *lag_max){
+    int mn = extent/80;  if(mn < 4) mn = 4;           // >= ~4 px
+    int mx = extent/10;  if(mx < mn+4) mx = mn+4;     // marge
+    if(mx > 200) mx = 200;                            // borne haute sûre
+    *lag_min = mn; *lag_max = mx;
 }
 
-/* médiane des gaps entre centres (taille de case) */
-static double median_gap_from_intervals(const Interval *iv, int niv){
-    if(niv < 2) return 0.0;
-    int m = niv - 1;
-    double *d = malloc(sizeof(double)*m);
-    for(int i=0;i<m;i++){
-        int c0 = (iv[i].start + iv[i].end)/2;
-        int c1 = (iv[i+1].start + iv[i+1].end)/2;
-        d[i] = (double)(c1 - c0);
-    }
-    for(int i=0;i<m;i++) for(int j=i+1;j<m;j++)
-        if(d[j]<d[i]){ double t=d[i]; d[i]=d[j]; d[j]=t; }
-    double med = (m%2) ? d[m/2] : 0.5*(d[m/2-1]+d[m/2]);
-    free(d);
-    return med;
-}
-
-/* mkdir si nécessaire */
+/* ============== mkdir si nécessaire ============== */
 static int ensure_dir(const char *path){
     struct stat st;
     if(stat(path,&st)==0) return S_ISDIR(st.st_mode)?0:-1;
     return mkdir(path,0755);
 }
 
-/* ============== API ============== */
+/* ============== API principale ============== */
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
                             guint8 black_thr,
                             guint8 R,guint8 G,guint8 B)
 {
-    /* 1) Profils limités à la zone */
+    /* 1) Profils sur la zone de grille */
     double *vr = col_black_ratio(img, black_thr, gx0,gx1, gy0,gy1);
     double *hr = row_black_ratio(img, black_thr, gx0,gx1, gy0,gy1);
     if(!vr || !hr){ free(vr); free(hr); return; }
 
     int nX = gx1-gx0+1, nY = gy1-gy0+1;
 
-    /* 2) Lissage */
-    int wv = nX/100; if(wv<3) wv=3; if(!(wv&1)) wv++;
-    int wh = nY/100; if(wh<3) wh=3; if(!(wh&1)) wh++;
+    /* 2) Lissage pour gommer les lettres */
+    int wv = nX/100; if(wv<5) wv=5; if(!(wv&1)) wv++;
+    int wh = nY/100; if(wh<5) wh=5; if(!(wh&1)) wh++;
     smooth_box(vr, nX, wv);
     smooth_box(hr, nY, wh);
 
-    /* 3) Composants & estimation du pas (taille de case) */
-    double meanX=0, meanY=0;
-    for(int i=0;i<nX;i++) meanX+=vr[i]; meanX/=nX;
-    for(int j=0;j<nY;j++) meanY+=hr[j]; meanY/=nY;
+    /* 3) Estimation du pas (taille de case) par autocorr */
+    int lag_min_x, lag_max_x, lag_min_y, lag_max_y;
+    lag_bounds_from_extent(nX, &lag_min_x, &lag_max_x);
+    lag_bounds_from_extent(nY, &lag_min_y, &lag_max_y);
 
-    Interval *ivX = malloc(sizeof(Interval)*nX);
-    Interval *ivY = malloc(sizeof(Interval)*nY);
-    int nIvX = find_components(vr, nX, 1.6*meanX, 6, ivX);
-    int nIvY = find_components(hr, nY, 1.6*meanY, 6, ivY);
+    int cell_w = best_lag_autocorr(vr, nX, lag_min_x, lag_max_x);
+    int cell_h = best_lag_autocorr(hr, nY, lag_min_y, lag_max_y);
 
-    int cell_w = (int)llround(median_gap_from_intervals(ivX, nIvX));
-    int cell_h = (int)llround(median_gap_from_intervals(ivY, nIvY));
+    free(vr); free(hr);
 
-    free(vr); free(hr); free(ivX); free(ivY);
+    /* garde-fous */
+    if(cell_w < lag_min_x) cell_w = lag_min_x;
+    if(cell_h < lag_min_y) cell_h = lag_min_y;
+    if(cell_w > lag_max_x) cell_w = lag_max_x;
+    if(cell_h > lag_max_y) cell_h = lag_max_y;
 
-    if(cell_w < 2) cell_w = (nX>0)? nX/20 : 8;
-    if(cell_h < 2) cell_h = (nY>0)? nY/20 : 8;
-    if(cell_w < 2) cell_w = 8;
-    if(cell_h < 2) cell_h = 8;
-
-    /* 4) Tuilage régulier */
+    /* 4) Quadrillage régulier et export */
     int gridW = gx1 - gx0 + 1;
     int gridH = gy1 - gy0 + 1;
-    int cols = (int)llround((double)gridW / (double)cell_w);
-    int rows = (int)llround((double)gridH / (double)cell_h);
+    int cols = (cell_w>0) ? (int)llround((double)gridW / (double)cell_w) : 0;
+    int rows = (cell_h>0) ? (int)llround((double)gridH / (double)cell_h) : 0;
     if(cols < 1) cols = 1;
     if(rows < 1) rows = 1;
 
+    /* pas effectif: force le pavage exact de la zone */
     double stepX = (double)gridW / (double)cols;
     double stepY = (double)gridH / (double)rows;
 
-    const int border_margin = 2;   // rester à l’intérieur du cadre rouge/vert
+    const int border_margin = 2;     // rester à l’intérieur du cadre rouge/vert
+    const char *outdir = "cells";
 
-    /* 5) Dossier de sortie + export PNG */
-    const char *outdir = "cells";  // change le nom si tu veux
     if(ensure_dir(outdir) != 0){
         fprintf(stderr, "[warn] impossible de créer le dossier '%s'\n", outdir);
     }
 
+    int Wsrc = gdk_pixbuf_get_width(img);
+    int Hsrc = gdk_pixbuf_get_height(img);
+
     for(int r=0; r<rows; r++){
         int y0 = (int)llround(gy0 + r*stepY)     + border_margin;
         int y1 = (int)llround(gy0 + (r+1)*stepY) - 1 - border_margin;
-        if(y1 - y0 < 3) continue;
 
         for(int c=0; c<cols; c++){
             int x0 = (int)llround(gx0 + c*stepX)     + border_margin;
             int x1 = (int)llround(gx0 + (c+1)*stepX) - 1 - border_margin;
-            if(x1 - x0 < 3) continue;
 
-            /* dessine SEULEMENT le grand cadre bleu sur l'image d'affichage */
+            /* clamp + filtrage de cas dégénérés */
+            if(x0 < 0) x0 = 0; if(y0 < 0) y0 = 0;
+            if(x1 >= Wsrc) x1 = Wsrc-1; if(y1 >= Hsrc) y1 = Hsrc-1;
+            if(x1 - x0 + 1 < 6 || y1 - y0 + 1 < 6) continue;
+
+            /* dessine le grand cadre bleu sur l'image d'affichage */
             draw_rect_thick(disp, x0,y0,x1,y1, R,G,B,2);
 
-            /* export de la case croppée depuis l'image source (sans tracés) */
+            /* export PNG de la case (vue recadrée, pas de souci d'alpha) */
             int w = x1 - x0 + 1, h = y1 - y0 + 1;
-            if(w>1 && h>1){
-                GdkPixbuf *sub = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, w, h);
-                gdk_pixbuf_copy_area(img, x0, y0, w, h, sub, 0, 0);
+            GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, x0, y0, w, h);
 
-                char path[512];
-                snprintf(path, sizeof(path), "%s/cell_r%03d_c%03d.png", outdir, r, c);
-                if(!gdk_pixbuf_save(sub, path, "png", NULL, NULL)){
-                    fprintf(stderr, "[warn] sauvegarde échouée: %s\n", path);
-                }
-                g_object_unref(sub);
+            char path[512];
+            snprintf(path, sizeof(path), "%s/cell_r%03d_c%03d.png", outdir, r, c);
+
+            GError *err = NULL;
+            if(!gdk_pixbuf_save(sub, path, "png", &err, NULL)){
+                fprintf(stderr, "[warn] sauvegarde échouée: %s (%s)\n",
+                        path, err ? err->message : "unknown");
+                if(err) g_error_free(err);
             }
+            g_object_unref(sub);
         }
     }
 
-    /* log optionnel
-    fprintf(stderr,"[grid] cell_w=%d, cell_h=%d, cols=%d, rows=%d -> dossiers: %s\n",
-            cell_w, cell_h, cols, rows, outdir);
+    /* debug optionnel
+    fprintf(stderr,"[grid] cell_w=%d, cell_h=%d, cols=%d, rows=%d\n",
+            cell_w, cell_h, cols, rows);
     */
 }
 
