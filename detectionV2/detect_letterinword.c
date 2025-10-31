@@ -172,6 +172,16 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
                              guint8 black_thr,
                              guint8 R,guint8 G,guint8 B)
 {
+    const int Wsrc=gdk_pixbuf_get_width(img);
+    const int Hsrc=gdk_pixbuf_get_height(img);
+
+    // --- Ajustement automatique de la marge (ajouté) ---
+    wx0 = clampi(wx0 - 5, 0, Wsrc-1);
+    wx1 = clampi(wx1 + 40, 0, Wsrc-1);
+    wy0 = clampi(wy0 - 2, 0, Hsrc-1);
+    wy1 = clampi(wy1 + 2, 0, Hsrc-1);
+    // ----------------------------------------------------
+
     // root directory
     if(ensure_dir_local("letterInWord")!=0){
         fprintf(stderr,"[detect_letterinword] Impossible de créer 'letterInWord' (on continue sans sauvegarde).\n");
@@ -184,8 +194,8 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 	    return;
     }
 
-    const int Wsrc=gdk_pixbuf_get_width(img);
-    const int Hsrc=gdk_pixbuf_get_height(img);
+    const int W=gdk_pixbuf_get_width(img);
+    const int H=gdk_pixbuf_get_height(img);
 
     int in=0, ystart=0, last=-1000000000;
     int word_idx=0;
@@ -204,7 +214,7 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 	{
             // end of tape
 	    int y0=ystart, y1=last; in=0;
-            y0=clampi(y0,0,Hsrc-1); y1=clampi(y1,0,Hsrc-1);
+            y0=clampi(y0,0,H-1); y1=clampi(y1,0,H-1);
             if(y1-y0+1<6)
 	    {
 		    continue;
@@ -217,7 +227,7 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 		    ensure_dir_local(word_dir);
 	    }
 
-            int cw = clampi(wx1,0,Wsrc-1) - clampi(wx0,0,Wsrc-1) + 1;
+            int cw = clampi(wx1,0,W-1) - clampi(wx0,0,W-1) + 1;
             if(cw<=0)
 	    {
 		    word_idx++;
@@ -235,8 +245,8 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 		int black=0, tot=0;
                 for(int yy=y0; yy<=y1; yy++)
 		{
-                    int gx=clampi(wx0+x,0,Wsrc-1);
-                    int gy=clampi(yy,0,Hsrc-1);
+                    int gx=clampi(wx0+x,0,W-1);
+                    int gy=clampi(yy,0,H-1);
                     if(get_gray(img,gx,gy) < (int)black_thr)
 		    {
 			    black++;
@@ -262,27 +272,23 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 	       	}
                 else if(cx_in && (x-cx_last)>2)
 		{
-                    int X0=clampi(wx0+cx0,0,Wsrc-1);
-                    int X1=clampi(wx0+cx_last,0,Wsrc-1);
+                    int X0=clampi(wx0+cx0,0,W-1);
+                    int X1=clampi(wx0+cx_last,0,W-1);
                     int rx0,ry0,rx1,ry1;
                     if((X1-X0)>=3 && ink_bbox(img,X0,y0,X1,y1,black_thr,&rx0,&ry0,&rx1,&ry1))
 		    {
                         draw_rect_thick(disp,rx0,ry0,rx1,ry1,R,G,B,2);
-                        int ww=clampi(rx1,0,Wsrc-1)-clampi(rx0,0,Wsrc-1)+1;
-                        int hh=clampi(ry1,0,Hsrc-1)-clampi(ry0,0,Hsrc-1)+1;
+                        int ww=rx1-rx0+1;
+                        int hh=ry1-ry0+1;
                         if(ww>=3 && hh>=3)
 			{
-                            int sx=clampi(rx0,0,Wsrc-1), sy=clampi(ry0,0,Hsrc-1);
-                            ww=clampi(ww,1,Wsrc-sx); hh=clampi(hh,1,Hsrc-sy);
+                            int sx=rx0, sy=ry0;
                             GdkPixbuf *sub=gdk_pixbuf_new_subpixbuf(img,sx,sy,ww,hh);
                             if(sub)
 			    {
                                 char out_path[512];
                                 snprintf(out_path,sizeof(out_path),"%s/letter_%03d.png",word_dir,letter_idx);
-                                if(!gdk_pixbuf_save(sub,out_path,"png",NULL,NULL))
-				{
-                                    fprintf(stderr,"[detect_letterinword] Échec sauvegarde %s\n",out_path);
-                                }
+                                gdk_pixbuf_save(sub,out_path,"png",NULL,NULL);
                                 g_object_unref(sub);
                             }
                             letter_idx++;
@@ -293,18 +299,17 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
             }
             if(cx_in)
 	    {
-                int X0=clampi(wx0+cx0,0,Wsrc-1);
-                int X1=clampi(wx0+cx_last,0,Wsrc-1);
+                int X0=clampi(wx0+cx0,0,W-1);
+                int X1=clampi(wx0+cx_last,0,W-1);
                 int rx0,ry0,rx1,ry1;
                 if((X1-X0)>=3 && ink_bbox(img,X0,y0,X1,y1,black_thr,&rx0,&ry0,&rx1,&ry1))
 		{
                     draw_rect_thick(disp,rx0,ry0,rx1,ry1,R,G,B,2);
-                    int ww=clampi(rx1,0,Wsrc-1)-clampi(rx0,0,Wsrc-1)+1;
-                    int hh=clampi(ry1,0,Hsrc-1)-clampi(ry0,0,Hsrc-1)+1;
+                    int ww=rx1-rx0+1;
+                    int hh=ry1-ry0+1;
                     if(ww>=3 && hh>=3)
 		    {
-                        int sx=clampi(rx0,0,Wsrc-1), sy=clampi(ry0,0,Hsrc-1);
-                        ww=clampi(ww,1,Wsrc-sx); hh=clampi(hh,1,Hsrc-sy);
+                        int sx=rx0, sy=ry0;
                         GdkPixbuf *sub=gdk_pixbuf_new_subpixbuf(img,sx,sy,ww,hh);
                         if(sub)
 			{
@@ -326,14 +331,14 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
     if(in)
     {
 	int y0=ystart, y1=last;
-        y0=clampi(y0,0,Hsrc-1); y1=clampi(y1,0,Hsrc-1);
+        y0=clampi(y0,0,H-1); y1=clampi(y1,0,H-1);
         if(y1-y0+1>=6)
 	{
             char word_dir[256];
             snprintf(word_dir,sizeof(word_dir),"letterInWord/word_%03d",word_idx);
             if(ensure_dir_local("letterInWord")==0) ensure_dir_local(word_dir);
 
-            int cw = clampi(wx1,0,Wsrc-1) - clampi(wx0,0,Wsrc-1) + 1;
+            int cw = clampi(wx1,0,W-1) - clampi(wx0,0,W-1) + 1;
             if(cw>0)
 	    {
                 double *col=(double*)malloc(sizeof(double)*cw);
@@ -341,12 +346,11 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 		{
                     for(int x=0;x<cw;x++)
 		    {
-                        int black=0;
-		       	int tot=0;
+                        int black=0, tot=0;
                         for(int yy=y0; yy<=y1; yy++)
 			{
-                            int gx=clampi(wx0+x,0,Wsrc-1);
-                            int gy=clampi(yy,0,Hsrc-1);
+                            int gx=clampi(wx0+x,0,W-1);
+                            int gy=clampi(yy,0,H-1);
                             if(get_gray(img,gx,gy) < (int)black_thr)
 			    {
 				    black++;
@@ -355,6 +359,7 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
                         }
                         col[x]=(tot>0)?((double)black/(double)tot):0.0;
                     }
+
                     int cx_in=0, cx0=0, cx_last=-1000000000;
                     int letter_idx=0;
                     for(int x=0;x<cw;x++)
@@ -362,24 +367,22 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
                         double cr=col[x];
                         if(cr>0.08)
 			{ 
-				if(!cx_in)
-				{
-					cx_in=1; cx0=x;} cx_last=x;
+				if(!cx_in){cx_in=1; cx0=x;}
+				cx_last=x;
 		       	}
                         else if(cx_in && (x-cx_last)>2)
 			{
-                            int X0=clampi(wx0+cx0,0,Wsrc-1);
-                            int X1=clampi(wx0+cx_last,0,Wsrc-1);
+                            int X0=clampi(wx0+cx0,0,W-1);
+                            int X1=clampi(wx0+cx_last,0,W-1);
                             int rx0,ry0,rx1,ry1;
                             if((X1-X0)>=3 && ink_bbox(img,X0,y0,X1,y1,black_thr,&rx0,&ry0,&rx1,&ry1))
 			    {
                                 draw_rect_thick(disp,rx0,ry0,rx1,ry1,R,G,B,2);
-                                int ww=clampi(rx1,0,Wsrc-1)-clampi(rx0,0,Wsrc-1)+1;
-                                int hh=clampi(ry1,0,Hsrc-1)-clampi(ry0,0,Hsrc-1)+1;
+                                int ww=rx1-rx0+1;
+                                int hh=ry1-ry0+1;
                                 if(ww>=3 && hh>=3)
 				{
-                                    int sx=clampi(rx0,0,Wsrc-1), sy=clampi(ry0,0,Hsrc-1);
-                                    ww=clampi(ww,1,Wsrc-sx); hh=clampi(hh,1,Hsrc-sy);
+                                    int sx=rx0, sy=ry0;
                                     GdkPixbuf *sub=gdk_pixbuf_new_subpixbuf(img,sx,sy,ww,hh);
                                     if(sub)
 				    {
@@ -396,18 +399,17 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
                     }
                     if(cx_in)
 		    {
-                        int X0=clampi(wx0+cx0,0,Wsrc-1);
-                        int X1=clampi(wx0+cx_last,0,Wsrc-1);
+                        int X0=clampi(wx0+cx0,0,W-1);
+                        int X1=clampi(wx0+cx_last,0,W-1);
                         int rx0,ry0,rx1,ry1;
                         if((X1-X0)>=3 && ink_bbox(img,X0,y0,X1,y1,black_thr,&rx0,&ry0,&rx1,&ry1))
 			{
                             draw_rect_thick(disp,rx0,ry0,rx1,ry1,R,G,B,2);
-                            int ww=clampi(rx1,0,Wsrc-1)-clampi(rx0,0,Wsrc-1)+1;
-                            int hh=clampi(ry1,0,Hsrc-1)-clampi(ry0,0,Hsrc-1)+1;
+                            int ww=rx1-rx0+1;
+                            int hh=ry1-ry0+1;
                             if(ww>=3 && hh>=3)
 			    {
-                                int sx=clampi(rx0,0,Wsrc-1), sy=clampi(ry0,0,Hsrc-1);
-                                ww=clampi(ww,1,Wsrc-sx); hh=clampi(hh,1,Hsrc-sy);
+                                int sx=rx0, sy=ry0;
                                 GdkPixbuf *sub=gdk_pixbuf_new_subpixbuf(img,sx,sy,ww,hh);
                                 if(sub)
 				{
@@ -427,4 +429,3 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
 
     free(row);
 }
-
