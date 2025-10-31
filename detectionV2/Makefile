@@ -37,6 +37,7 @@ sanitize: clean $(APP)
 
 clean:
 	rm -f $(OBJ) $(APP)
+	rm -rf cells letterInWord
 
 .PHONY: all run debug sanitize clean
 

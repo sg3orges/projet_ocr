@@ -14,14 +14,14 @@ int CreaMatrice(const char *Fichier , char matrice[100][100])
     int ligne = 0;
     char ligneM[MAX];
 
-    while (fgets(ligneM, sizeof(ligneM), f))
+    while (fgets(ligneM, sizeof(ligneM), f))//select line  in document f 
     {
-        ligneM[strcspn(ligneM,"\n")] = '\0'; //supp \n
+        ligneM[strcspn(ligneM,"\n")] = '\0'; //supp \n in the line 
         if(strlen(ligneM)==0)
         {
             continue;
         }
-        strcpy(matrice[ligne], ligneM);
+        strcpy(matrice[ligne], ligneM); //copy the line in mat 
         ligne++;
     }
     
@@ -46,7 +46,7 @@ int ChercheMot(const char *mot, char matrice[MAX][MAX], int nbLignes, int nbColo
         {1, -1},  
         {-1, 1},  
         {-1, -1}  
-    };
+    }; // all direction in mat
 
     for (int i = 0; i < nbLignes; i++)
     {
@@ -86,10 +86,10 @@ int ChercheMot(const char *mot, char matrice[MAX][MAX], int nbLignes, int nbColo
         }
     }
 
-    return 0; // mot non trouvé
+    return 0; // word not found
 }
 
-void ConvertirMajuscules(char *mot)
+void ConvertirMajuscules(char *mot)//toUP
 {
     for (int i = 0; mot[i] != '\0'; i++)
     {
@@ -101,7 +101,7 @@ void ConvertirMajuscules(char *mot)
 }
 
 
-int main(int argc, char *argv[])
+int main(int argc, char *argv[]) // this part call all fonction of the solver and print the final result
 {
     if (argc != 3)
     {
@@ -122,7 +122,7 @@ int main(int argc, char *argv[])
     if (ChercheMot(argv[2], matrice, nbLignes, nbColonnes, &li1, &co1, &li2, &co2))
     {
        
-        printf("(%d,%d)(%d,%d)\n", co1, li1,co2 ,li2);
+        printf("(%d,%d)(%d,%d)\n", co1, li1,co2 ,li2);//print the position
     
     }
     else
