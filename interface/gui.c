@@ -358,8 +358,8 @@ static void on_save_rotation(GtkWidget *widget, gpointer user_data)
 
     char output_path[1024];
     const char *basename_str = (selected_image_path[0] != '\0') ? g_path_get_basename(selected_image_path) : "image.png";
-    if (selected_image_path[0] != '\0') g_snprintf(output_path, sizeof(output_path), "../loader/images/%s_clean.png", basename_str);
-    else g_snprintf(output_path, sizeof(output_path), "../loader/images/output_clean.png");
+    if (selected_image_path[0] != '\0') g_snprintf(output_path, sizeof(output_path), "../interface/images/%s_clean.png", basename_str);
+    else g_snprintf(output_path, sizeof(output_path), "../interface/images/output_clean.png");
 
     GError *err = NULL;
     if (gdk_pixbuf_save(processed, output_path, "png", &err, NULL)) printf("Saved: %s\n", output_path);
