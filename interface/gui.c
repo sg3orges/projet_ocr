@@ -1,7 +1,6 @@
 // gui.c
-// GTK interface with AUTO rotation + manual tweak.
-// Features: Hough Transform for auto-deskewing, smart blob removal, and text repair.
-// Tweaked for thinner resulting text.
+// GTK interface
+// Workflow: Load -> Auto Rotate -> Clean (Simple Size Filter) -> Save
 
 #include <gtk/gtk.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -13,8 +12,11 @@
 static char selected_image_path[512] = {0};
 static GtkWidget *image_widget = NULL;
 static GtkWidget *scale_widget = NULL;
+
+// Buffers
 static GdkPixbuf *original_pixbuf = NULL;
-static GdkPixbuf *rotated_pixbuf = NULL;
+static GdkPixbuf *current_display_pixbuf = NULL;
+
 static double current_angle = 0.0;
 
 #ifndef M_PI
@@ -22,7 +24,7 @@ static double current_angle = 0.0;
 #endif
 
 // --------------------------------------------------
-// Helper: Wrapper for GdkPixbufDestroyNotify
+// Helper: Memory cleaning
 // --------------------------------------------------
 static void free_pixbuf_data(guchar *data, gpointer user_data)
 {
@@ -31,7 +33,7 @@ static void free_pixbuf_data(guchar *data, gpointer user_data)
 }
 
 // --------------------------------------------------
-// Rotation Logic (High Quality)
+// Rotation Logic
 // --------------------------------------------------
 static GdkPixbuf *rotate_pixbuf_any_angle(GdkPixbuf *src, double angle_deg)
 {
@@ -67,7 +69,7 @@ static GdkPixbuf *rotate_pixbuf_any_angle(GdkPixbuf *src, double angle_deg)
 
             for (int c = 0; c < channels; c++)
             {
-                guchar val = 255; // Default white background
+                guchar val = 255;
                 if (isx >= 0 && isy >= 0 && isx < src_w && isy < src_h)
                     val = src_pixels[isy * rowstride + isx * channels + c];
 
@@ -79,16 +81,12 @@ static GdkPixbuf *rotate_pixbuf_any_angle(GdkPixbuf *src, double angle_deg)
     return gdk_pixbuf_new_from_data(dest_pixels, GDK_COLORSPACE_RGB, channels == 4, 8, dest_w, dest_h, dest_rowstride, free_pixbuf_data, NULL);
 }
 
-// --------------------------------------------------
-// Update Display
-// --------------------------------------------------
 static void update_image_rotation(double angle)
 {
     if (!original_pixbuf) return;
-    if (rotated_pixbuf) g_object_unref(rotated_pixbuf);
-    
-    rotated_pixbuf = rotate_pixbuf_any_angle(original_pixbuf, angle);
-    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), rotated_pixbuf);
+    if (current_display_pixbuf) g_object_unref(current_display_pixbuf);
+    current_display_pixbuf = rotate_pixbuf_any_angle(original_pixbuf, angle);
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
 }
 
 static void on_rotation_changed(GtkRange *range, gpointer user_data)
@@ -99,7 +97,7 @@ static void on_rotation_changed(GtkRange *range, gpointer user_data)
 }
 
 // --------------------------------------------------
-// Auto-Rotation: Hough Transform Logic
+// Auto-Rotation
 // --------------------------------------------------
 static double detect_skew_angle(GdkPixbuf *pixbuf)
 {
@@ -109,7 +107,6 @@ static double detect_skew_angle(GdkPixbuf *pixbuf)
     int channels = gdk_pixbuf_get_n_channels(pixbuf);
     guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
 
-    // 1. Edge Detection (Simple Sobel Approximation)
     unsigned char *edges = g_malloc0(w * h);
     for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
@@ -121,7 +118,6 @@ static double detect_skew_angle(GdkPixbuf *pixbuf)
         }
     }
 
-    // 2. Simple Hough Transform for Lines
     int num_thetas = 180; 
     double theta_step = 1.0; 
     double start_theta = -90.0;
@@ -144,7 +140,6 @@ static double detect_skew_angle(GdkPixbuf *pixbuf)
         }
     }
 
-    // Find Peak
     int max_votes = 0;
     int best_theta_idx = 0;
     for (int t = 0; t < num_thetas; t++) {
@@ -158,11 +153,12 @@ static double detect_skew_angle(GdkPixbuf *pixbuf)
 
     double best_theta = start_theta + best_theta_idx * theta_step;
     double correction = 0;
-    if (abs(best_theta - 90) < 45) correction = 90 - best_theta;
-    else if (abs(best_theta + 90) < 45) correction = -90 - best_theta;
+
+    if (fabs(best_theta - 90) < 45) correction = 90 - best_theta;
+    else if (fabs(best_theta + 90) < 45) correction = -90 - best_theta;
     else correction = -best_theta;
 
-    printf("[Auto] Detected dominant line angle: %.2f. Correction: %.2f\n", best_theta, correction);
+    printf("[Auto] Correction detected: %.2f\n", correction);
     g_free(edges);
     g_free(accumulator);
     return correction;
@@ -177,7 +173,7 @@ static void on_auto_rotate_clicked(GtkWidget *widget, gpointer user_data)
 }
 
 // --------------------------------------------------
-// Binarization (Black & White)
+// Binarization (Noir & Blanc)
 // --------------------------------------------------
 static void apply_black_and_white(GdkPixbuf *pixbuf)
 {
@@ -197,8 +193,7 @@ static void apply_black_and_white(GdkPixbuf *pixbuf)
     }
     mean /= (w * h);
     
-    // MODIFIED: Lowered threshold multiplier from 0.90 to 0.85.
-    // This makes the initial binary letters thinner/skinnier.
+    // Seuil standard pour conserver le texte tel quel
     double threshold = mean * 0.85; 
 
     for (int y = 0; y < h; y++) {
@@ -213,41 +208,8 @@ static void apply_black_and_white(GdkPixbuf *pixbuf)
 }
 
 // --------------------------------------------------
-// Dilation (Gentle Repair)
-// --------------------------------------------------
-static void apply_dilation(GdkPixbuf *pixbuf)
-{
-    int w = gdk_pixbuf_get_width(pixbuf);
-    int h = gdk_pixbuf_get_height(pixbuf);
-    int channels = gdk_pixbuf_get_n_channels(pixbuf);
-    int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
-    guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
-    
-    guchar *src = g_malloc0(rowstride * h);
-    memcpy(src, pixels, rowstride * h);
-
-    // Uses a 4-connected kernel (cross shape) to gently thicken/repair text.
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            if (src[y * rowstride + x * channels] == 0) continue;
-            int become_black = 0;
-            if (y > 0 && src[(y - 1) * rowstride + x * channels] == 0) become_black = 1;
-            else if (y < h - 1 && src[(y + 1) * rowstride + x * channels] == 0) become_black = 1;
-            else if (x > 0 && src[y * rowstride + (x - 1) * channels] == 0) become_black = 1;
-            else if (x < w - 1 && src[y * rowstride + (x + 1) * channels] == 0) become_black = 1;
-            
-            if (become_black) {
-                guchar *p = pixels + y * rowstride + x * channels;
-                p[0] = p[1] = p[2] = 0; 
-                if (channels == 4) p[3] = 255;
-            }
-        }
-    }
-    g_free(src);
-}
-
-// --------------------------------------------------
-// Blob Removal (Smart: Size + Solidity check)
+// Suppression SIMPLE des gros paquets
+// Règle : Si (Aire > 1000) ET (Pas le cadre) -> Supprimer
 // --------------------------------------------------
 static void remove_large_blobs(GdkPixbuf *pixbuf, int min_area)
 {
@@ -279,19 +241,20 @@ static void remove_large_blobs(GdkPixbuf *pixbuf, int min_area)
             int area = 0;
             int min_x = x, max_x = x, min_y = y, max_y = y;
 
+            // 1. SCAN : On mesure la zone (Flood Fill)
             while (sp > 0) {
                 int cur = stack[--sp];
                 area++;
-                int cy = cur / w;
-                int cx = cur % w;
-                if (cx < min_x) min_x = cx; if (cx > max_x) max_x = cx;
-                if (cy < min_y) min_y = cy; if (cy > max_y) max_y = cy;
+                int cy = cur / w; int cx = cur % w;
 
-                const int nx[4] = {-1, 1, 0, 0};
-                const int ny[4] = {0, 0, -1, 1};
+                if (cx < min_x) min_x = cx; 
+                if (cx > max_x) max_x = cx;
+                if (cy < min_y) min_y = cy; 
+                if (cy > max_y) max_y = cy;
+
+                const int nx[4] = {-1, 1, 0, 0}; const int ny[4] = {0, 0, -1, 1};
                 for (int k = 0; k < 4; k++) {
-                    int nx_x = cx + nx[k];
-                    int ny_y = cy + ny[k];
+                    int nx_x = cx + nx[k]; int ny_y = cy + ny[k];
                     if (nx_x < 0 || nx_x >= w || ny_y < 0 || ny_y >= h) continue;
                     int nidx = ny_y * w + nx_x;
                     if (visited[nidx]) continue;
@@ -307,14 +270,23 @@ static void remove_large_blobs(GdkPixbuf *pixbuf, int min_area)
                 }
             }
 
-            long long bb_area = (long long)(max_x - min_x + 1) * (max_y - min_y + 1);
-            double solidity = (double)area / bb_area;
+            // 2. DECISION DE SUPPRESSION
+            int blob_w = max_x - min_x;
+            int blob_h = max_y - min_y;
+            
+            // Protection CADRE : Si l'objet prend +45% de la largeur ET +45% de la hauteur
+            int is_frame_like = (blob_w > w * 0.45) && (blob_h > h * 0.45);
 
-            // Remove if large AND solid (birds). Keep hollow frames.
-            if (area >= min_area && solidity > 0.4) {
+            // Suppression SIMPLE : Si c'est GROS et que ce n'est PAS LE CADRE -> ON VIRE
+            if (!is_frame_like && area >= min_area) {
+                
+                printf("[Clean] Blob removed: Area=%d px (W:%d, H:%d).\n", area, blob_w, blob_h);
+
+                // Re-remplissage en BLANC
                 sp = 0; stack[sp++] = y * w + x;
                 guchar *seed = pixels + y * rowstride + x * channels;
                 seed[0] = seed[1] = seed[2] = 255; 
+                
                 while (sp > 0) {
                     int cur = stack[--sp];
                     int cy = cur / w; int cx = cur % w;
@@ -341,39 +313,69 @@ static void remove_large_blobs(GdkPixbuf *pixbuf, int min_area)
 }
 
 // --------------------------------------------------
-// Save Pipeline
+// BOUTONS ET CALLBACKS
 // --------------------------------------------------
-static void on_save_rotation(GtkWidget *widget, gpointer user_data)
+
+// Bouton "CLEAN" : Applique le filtre de suppression
+static void on_clean_clicked(GtkWidget *widget, gpointer user_data)
 {
     (void)widget; (void)user_data;
-    if (!original_pixbuf) { printf("No image.\n"); return; }
+    
+    if (!current_display_pixbuf) {
+        printf("[Error] No image to clean. Load one first.\n");
+        return;
+    }
 
-    GdkPixbuf *src = rotated_pixbuf ? rotated_pixbuf : original_pixbuf;
-    GdkPixbuf *processed = gdk_pixbuf_copy(src);
+    // 1. Noir et Blanc
+    apply_black_and_white(current_display_pixbuf);
+    
+    // 2. Suppression des gros paquets (> 1000px)
+    // PLUS DE DILATION/EPAISSISSEMENT ICI
+    remove_large_blobs(current_display_pixbuf, 1000);
 
-    // Pipeline steps:
-    apply_black_and_white(processed); // 1. Binarize (thinner start)
-    remove_large_blobs(processed, 2000); // 2. Remove solid blobs
-    apply_dilation(processed); // 3. Repair/Thicken gently
+    // Mise à jour visuelle
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
+    
+    printf("[Info] Clean finished (Size only, no thickening).\n");
+}
+
+// Bouton "SAVE"
+static void on_save_clicked(GtkWidget *widget, gpointer user_data)
+{
+    (void)widget; (void)user_data;
+    
+    if (!current_display_pixbuf) {
+        printf("[Error] No image to save.\n");
+        return;
+    }
+
+    GdkPixbuf *to_save = gdk_pixbuf_copy(current_display_pixbuf);
+    apply_black_and_white(to_save); // Sécurité
 
     char output_path[1024];
     const char *basename_str = (selected_image_path[0] != '\0') ? g_path_get_basename(selected_image_path) : "image.png";
-    if (selected_image_path[0] != '\0') g_snprintf(output_path, sizeof(output_path), "../interface/images/%s_clean.png", basename_str);
-    else g_snprintf(output_path, sizeof(output_path), "../interface/images/output_clean.png");
+    
+    if (selected_image_path[0] != '\0') 
+        g_snprintf(output_path, sizeof(output_path), "images/%s_processed.png", basename_str);
+    else 
+        g_snprintf(output_path, sizeof(output_path), "images/output_processed.png");
 
     GError *err = NULL;
-    if (gdk_pixbuf_save(processed, output_path, "png", &err, NULL)) printf("Saved: %s\n", output_path);
-    else { printf("Error: %s\n", err->message); g_error_free(err); }
-    g_object_unref(processed);
+    if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) 
+        printf("[OK] Saved to: %s\n", output_path);
+    else { 
+        printf("[Error] Save failed: %s\n", err->message); 
+        g_error_free(err); 
+    }
+    
+    g_object_unref(to_save);
 }
 
-// --------------------------------------------------
-// Load
-// --------------------------------------------------
+// Bouton "LOAD"
 static void on_load_button_clicked(GtkWidget *widget, gpointer window)
 {
     (void)widget;
-    GtkWidget *dialog = gtk_file_chooser_dialog_new("Open", GTK_WINDOW(window), GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
+    GtkWidget *dialog = gtk_file_chooser_dialog_new("Open Image", GTK_WINDOW(window), GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
     GtkFileFilter *filter = gtk_file_filter_new();
     gtk_file_filter_add_mime_type(filter, "image/png");
     gtk_file_filter_add_mime_type(filter, "image/jpeg");
@@ -381,11 +383,16 @@ static void on_load_button_clicked(GtkWidget *widget, gpointer window)
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
         char *f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        
         if (original_pixbuf) g_object_unref(original_pixbuf);
+        if (current_display_pixbuf) g_object_unref(current_display_pixbuf);
+
         original_pixbuf = gdk_pixbuf_new_from_file(f, NULL);
         if (original_pixbuf) {
-            gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), original_pixbuf);
+            current_display_pixbuf = gdk_pixbuf_copy(original_pixbuf);
+            gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
             g_snprintf(selected_image_path, sizeof(selected_image_path), "%s", f);
+            gtk_range_set_value(GTK_RANGE(scale_widget), 0.0);
         }
         g_free(f);
     }
@@ -393,40 +400,57 @@ static void on_load_button_clicked(GtkWidget *widget, gpointer window)
 }
 
 // --------------------------------------------------
-// Main
+// Main UI Setup
 // --------------------------------------------------
 void run_gui(int argc, char *argv[])
 {
     gtk_init(&argc, &argv);
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(win), "Auto-Level Cleaner (Thinner Text)");
-    gtk_window_set_default_size(GTK_WINDOW(win), 800, 600);
+    gtk_window_set_title(GTK_WINDOW(win), "OCR Pre-processing Tool");
+    gtk_window_set_default_size(GTK_WINDOW(win), 900, 700);
     g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(win), box);
 
+    // Zone Image
     image_widget = gtk_image_new();
     gtk_box_pack_start(GTK_BOX(box), image_widget, TRUE, TRUE, 0);
 
+    // Slider Rotation
     scale_widget = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, -45, 45, 0.1);
     gtk_box_pack_start(GTK_BOX(box), scale_widget, FALSE, FALSE, 0);
     g_signal_connect(scale_widget, "value-changed", G_CALLBACK(on_rotation_changed), NULL);
 
-    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
-    gtk_box_pack_start(GTK_BOX(box), hbox, FALSE, FALSE, 0);
+    // Boutons
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_halign(hbox, GTK_ALIGN_CENTER);
+    gtk_box_pack_start(GTK_BOX(box), hbox, FALSE, FALSE, 10);
 
+    // 1. Load
     GtkWidget *btn_load = gtk_button_new_with_label("Load Image");
     g_signal_connect(btn_load, "clicked", G_CALLBACK(on_load_button_clicked), win);
-    gtk_box_pack_start(GTK_BOX(hbox), btn_load, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(hbox), btn_load, FALSE, FALSE, 5);
 
+    // 2. Auto Rotate
     GtkWidget *btn_auto = gtk_button_new_with_label("Auto Rotate");
     g_signal_connect(btn_auto, "clicked", G_CALLBACK(on_auto_rotate_clicked), NULL);
-    gtk_box_pack_start(GTK_BOX(hbox), btn_auto, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(hbox), btn_auto, FALSE, FALSE, 5);
 
-    GtkWidget *btn_save = gtk_button_new_with_label("Save & Clean");
-    g_signal_connect(btn_save, "clicked", G_CALLBACK(on_save_rotation), NULL);
-    gtk_box_pack_start(GTK_BOX(hbox), btn_save, TRUE, TRUE, 0);
+    // 3. Clean
+    GtkWidget *btn_clean = gtk_button_new_with_label("Clean");
+    g_signal_connect(btn_clean, "clicked", G_CALLBACK(on_clean_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(hbox), btn_clean, FALSE, FALSE, 5);
+
+    // 4. Save
+    GtkWidget *btn_save = gtk_button_new_with_label("Save");
+    g_signal_connect(btn_save, "clicked", G_CALLBACK(on_save_clicked), NULL);
+    gtk_box_pack_start(GTK_BOX(hbox), btn_save, FALSE, FALSE, 5);
+
+    // 5. Quit
+    GtkWidget *btn_quit = gtk_button_new_with_label("Quit");
+    g_signal_connect(btn_quit, "clicked", G_CALLBACK(gtk_main_quit), NULL);
+    gtk_box_pack_start(GTK_BOX(hbox), btn_quit, FALSE, FALSE, 5);
 
     gtk_widget_show_all(win);
     gtk_main();
