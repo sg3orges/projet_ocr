@@ -4,201 +4,220 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <string.h>
+#include <unistd.h> 
 
-static inline guint8 get_gray(GdkPixbuf *pix,int x,int y)
-{
-    int n=gdk_pixbuf_get_n_channels(pix), rs=gdk_pixbuf_get_rowstride(pix);
-    guchar *p=gdk_pixbuf_get_pixels(pix)+y*rs+x*n;
-    return (p[0]+p[1]+p[2])/3;
-}
-static inline int clampi(int v,int lo,int hi)
-{
-       	return v<lo?lo:(v>hi?hi:v);
-}
+// =======================================================
+// FONCTIONS UTILITAIRES LOCALES (STATIC)
+// (Incluant la logique de Flood Fill pour la détection de blobs)
+// =======================================================
 
-static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
-                      guint8 R,guint8 G,guint8 B)
+static inline int clampi(int v, int lo, int hi)
 {
-    int W=gdk_pixbuf_get_width(pix),H=gdk_pixbuf_get_height(pix);
-    int n=gdk_pixbuf_get_n_channels(pix), rs=gdk_pixbuf_get_rowstride(pix);
-    guchar *px=gdk_pixbuf_get_pixels(pix);
-    x0=clampi(x0,0,W-1); x1=clampi(x1,0,W-1);
-    y0=clampi(y0,0,H-1); y1=clampi(y1,0,H-1);
-    if(x0>x1||y0>y1)
-    {
-	    return;
-    }
-    for(int x=x0;x<=x1;x++)
-    {
-        guchar *t=px+y0*rs+x*n, *b=px+y1*rs+x*n;
-        t[0]=R; t[1]=G; t[2]=B; b[0]=R; b[1]=G; b[2]=B;
-    }
-    for(int y=y0;y<=y1;y++)
-    {
-        guchar *l=px+y*rs+x0*n, *r=px+y*rs+x1*n;
-        l[0]=R; l[1]=G; l[2]=B; r[0]=R; r[1]=G; r[2]=B;
-    }
-}
-static void draw_rect_thick(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
-                            guint8 R,guint8 G,guint8 B,int t)
-{
-    for(int k=0;k<t;k++) draw_rect(pix,x0-k,y0-k,x1+k,y1+k,R,G,B);
+    return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static double* col_black_ratio(GdkPixbuf *pix, guint8 thr,
-                               int gx0,int gx1,int gy0,int gy1)
+static inline guint8 get_gray(GdkPixbuf *pix, int x, int y)
 {
-    int n=gx1-gx0+1; double *r=malloc(sizeof(double)*n); if(!r) return NULL;
-    for(int i=0;i<n;i++)
-    {
-        int x=gx0+i, black=0, tot=0;
-        for(int y=gy0;y<=gy1;y++)
-	{
-	       	if(get_gray(pix,x,y)<thr) black++; tot++;
-       	}
-        r[i]=(double)black/(double)tot;
-    }
-    return r;
-}
-static double* row_black_ratio(GdkPixbuf *pix, guint8 thr,
-                               int gx0,int gx1,int gy0,int gy1)
-{
-    int n=gy1-gy0+1; double *r=malloc(sizeof(double)*n); if(!r) return NULL;
-    for(int j=0;j<n;j++){
-        int y=gy0+j, black=0, tot=0;
-        for(int x=gx0;x<=gx1;x++)
-	{
-	       	if(get_gray(pix,x,y)<thr) black++; tot++; 
-	}
-        r[j]=(double)black/(double)tot;
-    }
-    return r;
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    x = clampi(x, 0, W - 1);
+    y = clampi(y, 0, H - 1);
+
+    int n = gdk_pixbuf_get_n_channels(pix), rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
+    return (p[0] + p[1] + p[2]) / 3;
 }
 
-static void smooth_box(double *a, int n, int k)
+static void put_rgb(GdkPixbuf *pix, int x, int y, guint8 R, guint8 G, guint8 B)
 {
-    if(!a || n<=0 || k<=1) return;
-    if(!(k&1)) k++;
-    int r=k/2;
-    for(int i=0;i<n;i++)
-    {
-        int L=(i-r<0)?0:(i-r);
-        int R=(i+r>=n)?(n-1):(i+r);
-        double acc=0.0;
-        for(int j=L;j<=R;j++) acc+=a[j];
-        a[i]=acc/(double)(R-L+1);
-    }
+    int W = gdk_pixbuf_get_width(pix), H = gdk_pixbuf_get_height(pix);
+    if(x < 0 || y < 0 || x >= W || y >= H) return;
+    int n = gdk_pixbuf_get_n_channels(pix), rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
+    p[0] = R; p[1] = G; p[2] = B;
 }
 
-static int best_lag_autocorr(const double *p, int n, int lag_min, int lag_max)
+static void draw_rect_thick(GdkPixbuf *pix, int x0, int y0, int x1, int y1,
+                            guint8 R, guint8 G, guint8 B, int thick)
 {
-    if(n<=0 || lag_min>=lag_max) return 0;
-    double mean=0.0; for(int i=0;i<n;i++) mean+=p[i]; mean/= (n>0?n:1);
-    double best=-1e300; int bestLag=lag_min;
-    for(int k=lag_min; k<=lag_max; k++)
+    for (int t_offset = 0; t_offset < thick; t_offset++)
     {
-        double acc=0.0;
-        for(int i=0; i+k<n; i++){
-            double a=p[i]-mean;
-            double b=p[i+k]-mean;
-            acc+=a*b;
+        int cx0 = clampi(x0 + t_offset, 0, gdk_pixbuf_get_width(pix) - 1);
+        int cx1 = clampi(x1 - t_offset, 0, gdk_pixbuf_get_width(pix) - 1);
+        int cy0 = clampi(y0 + t_offset, 0, gdk_pixbuf_get_height(pix) - 1);
+        int cy1 = clampi(y1 - t_offset, 0, gdk_pixbuf_get_height(pix) - 1);
+
+        for (int x = cx0; x <= cx1; x++)
+        {
+            put_rgb(pix, x, cy0, R, G, B);
+            put_rgb(pix, x, cy1, R, G, B);
         }
-        if(acc>best)
-	{
-	       	best=acc; bestLag=k;
-       	}
+        for (int y = cy0; y <= cy1; y++)
+        {
+            put_rgb(pix, cx0, y, R, G, B);
+            put_rgb(pix, cx1, y, R, G, B);
+        }
     }
-    return bestLag;
-}
-static void lag_bounds_from_extent(int extent,int *lag_min,int *lag_max)
-{
-    int mn=extent/80; if(mn<4) mn=4;
-    int mx=extent/10; if(mx<mn+4) mx=mn+4;
-    if(mx>200) mx=200;
-    *lag_min=mn; *lag_max=mx;
 }
 
 static int ensure_dir(const char *path)
 {
     struct stat st;
-    if(stat(path,&st)==0) return S_ISDIR(st.st_mode)?0:-1;
-    return mkdir(path,0755);
+    if (stat(path, &st) == 0) return S_ISDIR(st.st_mode) ? 0 : -1;
+    return mkdir(path, 0755);
 }
 
-// detection 
-void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
-                            int gx0,int gx1,int gy0,int gy1,
-                            guint8 black_thr,
-                            guint8 R,guint8 G,guint8 B)
+static inline gboolean is_black_pixel(GdkPixbuf *img, int x, int y, guint8 black_thr) {
+    int W = gdk_pixbuf_get_width(img);
+    int H = gdk_pixbuf_get_height(img);
+    if (x < 0 || x >= W || y < 0 || y >= H) return FALSE;
+    return get_gray(img, x, y) < black_thr;
+}
+
+typedef struct { int x, y; } Point;
+
+static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, int start_y,
+                                 int *min_x, int *max_x, int *min_y, int *max_y,
+                                 gboolean **visited, int img_width, int img_height)
 {
-    double *vr=col_black_ratio(img,black_thr,gx0,gx1,gy0,gy1);
-    double *hr=row_black_ratio(img,black_thr,gx0,gx1,gy0,gy1);
-    if(!vr||!hr)
+    Point *stack = g_malloc(img_width * img_height * sizeof(Point));
+    int stack_idx = 0;
+
+    stack[stack_idx++] = (Point){start_x, start_y};
+    visited[start_y][start_x] = TRUE;
+
+    *min_x = start_x; *max_x = start_x;
+    *min_y = start_y; *max_y = start_y;
+
+    int dx[] = {-1, 1, 0, 0};
+    int dy[] = {0, 0, -1, 1};
+
+    while (stack_idx > 0)
     {
-	    free(vr);free(hr);return;
-    }
+        Point current = stack[--stack_idx];
 
-    int nX=gx1-gx0+1,nY=gy1-gy0+1;
-    int wv=nX/70; if(wv<7) wv=7; if(!(wv&1)) wv++;
-    int wh=nY/70; if(wh<7) wh=7; if(!(wh&1)) wh++;
-    smooth_box(vr,nX,wv);
-    smooth_box(hr,nY,wh);
+        if (current.x < *min_x) *min_x = current.x;
+        if (current.x > *max_x) *max_x = current.x;
+        if (current.y < *min_y) *min_y = current.y;
+        if (current.y > *max_y) *max_y = current.y;
 
-    int lag_min_x,lag_max_x,lag_min_y,lag_max_y;
-    lag_bounds_from_extent(nX,&lag_min_x,&lag_max_x);
-    lag_bounds_from_extent(nY,&lag_min_y,&lag_max_y);
+        for (int i = 0; i < 4; i++)
+        {
+            int nx = current.x + dx[i];
+            int ny = current.y + dy[i];
 
-    int cell_w=best_lag_autocorr(vr,nX,lag_min_x,lag_max_x);
-    int cell_h=best_lag_autocorr(hr,nY,lag_min_y,lag_max_y);
-    free(vr);free(hr);
-
-    
-    int cell_size=(cell_w+cell_h)/2;
-
-    // correction only on the Y-axis
-    gy0 += cell_size/2;  // center on the first line
-
-    int gridW=gx1-gx0+1,gridH=gy1-gy0+1;
-    int cols=(cell_size>0)?(int)llround((double)gridW/(double)cell_size):1;
-    int rows=(cell_size>0)?(int)llround((double)gridH/(double)cell_size):1;
-    if(cols<1)cols=1;if(rows<1)rows=1;
-
-    const double expand_ratio=0.02;
-    const int border_margin=1;
-    ensure_dir("cells");
-
-    int Wsrc=gdk_pixbuf_get_width(img);
-    int Hsrc=gdk_pixbuf_get_height(img);
-
-    for(int r=0;r<rows;r++)
-    {
-        for(int c=0;c<cols;c++)
-	{
-            double cx=gx0+(c+0.5)*cell_size;
-            double cy=gy0+(r+0.5)*cell_size;
-            double w=cell_size*(1.0+expand_ratio);
-            double h=cell_size*(1.0+expand_ratio);
-
-            int x0=(int)llround(cx-w/2)+border_margin;
-            int y0=(int)llround(cy-h/2)+border_margin;
-            int x1=(int)llround(cx+w/2)-border_margin;
-            int y1=(int)llround(cy+h/2)-border_margin;
-
-            x0=clampi(x0,0,Wsrc-1);
-            y0=clampi(y0,0,Hsrc-1);
-            x1=clampi(x1,0,Wsrc-1);
-            y1=clampi(y1,0,Hsrc-1);
-
-            draw_rect_thick(disp,x0,y0,x1,y1,R,G,B,2);
-
-            int ww=x1-x0+1,hh=y1-y0+1;
-            if(ww<6||hh<6)continue;
-
-            GdkPixbuf *sub=gdk_pixbuf_new_subpixbuf(img,x0,y0,ww,hh);
-            char path[512];
-            snprintf(path,sizeof(path),"cells/image_%02d_%02d.png",r,c);
-            gdk_pixbuf_save(sub,path,"png",NULL,NULL);
-            g_object_unref(sub);
+            if (nx >= 0 && nx < img_width && ny >= 0 && ny < img_height &&
+                !visited[ny][nx] && is_black_pixel(img, nx, ny, black_thr))
+            {
+                if (stack_idx < img_width * img_height) {
+                    visited[ny][nx] = TRUE;
+                    stack[stack_idx++] = (Point){nx, ny};
+                }
+            }
         }
     }
+    g_free(stack);
+}
+
+// =======================================================
+// FONCTION PRINCIPALE DE DÉTECTION
+// =======================================================
+
+void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
+                            int gx0, int gx1, int gy0, int gy1,
+                            guint8 black_thr,
+                            guint8 R, guint8 G, guint8 B)
+{
+    int W = gdk_pixbuf_get_width(img);
+    int H = gdk_pixbuf_get_height(img);
+
+    // Clamping et vérification de la zone
+    gx0 = clampi(gx0, 0, W - 1); gx1 = clampi(gx1, 0, W - 1);
+    gy0 = clampi(gy0, 0, H - 1); gy1 = clampi(gy1, 0, H - 1);
+    
+    if (gx0 > gx1) { int t = gx0; gx0 = gx1; gx1 = t; }
+    if (gy0 > gy1) { int t = gy0; gy0 = gy1; gy1 = t; }
+
+    if (gx1 - gx0 < 5 || gy1 - gy0 < 5) return;
+
+    ensure_dir("cells");
+
+    // --- Définition des filtres de robustesse finals ---
+    const int MIN_AREA = 6;        // Aire minimale (pour éliminer les fragments de bruit)
+    const int MIN_DIM = 4;          // Dimension minimale (pour éliminer les lignes très fines)
+    const int MIN_HEIGHT_I = 10;    // Hauteur minimale pour accepter les 'I' minces
+    const double ASPECT_MAX = 3.0;  // Rapport max d'aspect
+    const int MAX_DIM_FACTOR = 29;   // 1/8 de la hauteur/largeur max (contre la fusion)
+    
+    // NOUVEAU SEUIL DE NOIR STRICT (Coupe les ponts de bruit gris et les lignes faibles)
+    const guint8 STRICT_BLACK_THR = 120; // 120 est plus restrictif que le standard 160
+    
+    // Allocation du tableau visited
+    gboolean **visited = g_malloc(H * sizeof(gboolean*));
+    for (int y = 0; y < H; y++) {
+        visited[y] = g_malloc(W * sizeof(gboolean));
+        memset(visited[y], 0, W * sizeof(gboolean)); 
+    }
+
+    int letter_idx = 0;
+    
+    // Parcourir chaque pixel de la zone GRILLE
+    for (int y = gy0; y <= gy1; y++)
+    {
+        for (int x = gx0; x <= gx1; x++)
+        {
+            // Utiliser le seuil strict pour la détection initiale du pixel noir
+            if (is_black_pixel(img, x, y, STRICT_BLACK_THR) && !visited[y][x])
+            {
+                int min_x, max_x, min_y, max_y;
+                
+                // Utiliser le seuil strict pour le Flood Fill aussi
+                flood_fill_component(img, STRICT_BLACK_THR, x, y,
+                                     &min_x, &max_x, &min_y, &max_y,
+                                     visited, W, H);
+
+                int width = max_x - min_x + 1;
+                int height = max_y - min_y + 1;
+                int area = width * height; 
+
+                // --- FILTRAGE DES COMPOSANTES CONNEXES ---
+                
+                // 1. FILTRE D'AIRE MINIMALE (Contre le bruit)
+                if (area < MIN_AREA) continue; 
+                
+                // 2. FILTRE DE DIMENSION MINIMALE
+                if (width < MIN_DIM || height < MIN_DIM) continue; 
+                
+                // 3. FILTRE D'EXCEPTION 'I' (Autorise les petits blobs s'ils sont très hauts)
+                if (area < MIN_AREA * 2 && height < MIN_HEIGHT_I) continue;
+
+                // 4. FILTRE DE TAILLE MAXIMALE (Contre les fusions qui dépassent une case)
+                if (width > W/MAX_DIM_FACTOR || height > H/MAX_DIM_FACTOR) continue; 
+                
+                // 5. FILTRE D'ASPECT (Contre les structures allongées)
+                double aspect_ratio = (double)width / (double)height;
+                if (aspect_ratio > ASPECT_MAX || aspect_ratio < (1.0 / ASPECT_MAX)) continue; 
+                
+
+                // Si la composante passe tous les filtres, c'est une lettre
+                draw_rect_thick(disp, min_x, min_y, max_x, max_y, R, G, B, 1); 
+
+                // Sauvegarde de la sous-image de la lettre
+                GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, min_x, min_y, width, height);
+                if (sub) {
+                    char path[512];
+                    snprintf(path, sizeof(path), "cells/letter_%04d.png", letter_idx++);
+                    gdk_pixbuf_save(sub, path, "png", NULL, NULL);
+                    g_object_unref(sub);
+                }
+            }
+        }
+    }
+
+    // Libérer la mémoire
+    for (int y = 0; y < H; y++) {
+        g_free(visited[y]);
+    }
+    g_free(visited);
 }
