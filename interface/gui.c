@@ -1,7 +1,6 @@
 // gui.c
 // GTK interface
-// Workflow: Load -> Auto Rotate -> Clean (Auto 35k + Smart Frame) -> Save
-// Simplified UI: No threshold slider.
+// Workflow: Load -> Auto Rotate -> Clean (Auto 35k + Smart Frame) -> Save (Force B/W)
 
 #include <gtk/gtk.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -411,10 +410,10 @@ static void on_clean_clicked(GtkWidget *widget, gpointer user_data)
     // 1. Noir et Blanc
     apply_black_and_white(current_display_pixbuf);
     
-    // 2. Suppression Brute (35000)
+    // 2. Suppression Brute (Seuil fixé à 35000)
     remove_large_blobs_fixed(current_display_pixbuf);
 
-    // 3. Cadre Intelligent
+    // 3. Ajout du cadre Intelligent (Scan Bas -> Haut)
     add_smart_frame_v2(current_display_pixbuf);
 
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
@@ -428,6 +427,10 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         return;
     }
 
+    // On s'assure que ce qui est sauvegardé est en Noir & Blanc
+    GdkPixbuf *to_save = gdk_pixbuf_copy(current_display_pixbuf);
+    apply_black_and_white(to_save);
+
     char output_path[1024];
     const char *basename_str = (selected_image_path[0] != '\0') ? g_path_get_basename(selected_image_path) : "image.png";
     
@@ -437,12 +440,14 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         g_snprintf(output_path, sizeof(output_path), "images/output_processed.png");
 
     GError *err = NULL;
-    if (gdk_pixbuf_save(current_display_pixbuf, output_path, "png", &err, NULL)) 
+    if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) 
         printf("[OK] Saved to: %s\n", output_path);
     else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 
     }
+    
+    g_object_unref(to_save);
 }
 
 static void on_load_button_clicked(GtkWidget *widget, gpointer window)
