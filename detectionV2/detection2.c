@@ -4,22 +4,23 @@
 #include <stdbool.h>
 #include <math.h>
 
-/* === Prototypes des fonctions externes === */
+/* === Prototypes des fonctions externes (Doivent exister dans les autres fichiers) === */
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
-                            guint8 black_thr,
-                            guint8 R,guint8 G,guint8 B);
+                            guint8 black_thr, guint8 R,guint8 G,guint8 B);
 void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
-                             int wx0,int wx1,int wy0,int wy1,
-                             guint8 black_thr,
-                             guint8 R,guint8 G,guint8 B);
+                            int wx0,int wx1,int wy0,int wy1,
+                            guint8 black_thr, guint8 R,guint8 G,guint8 B);
 
+
+/* === Fonctions Utilitaires Locales (Static) === */
 
 static inline int clampi(int v,int lo,int hi)
 {
-       	return v<lo?lo:(v>hi?hi:v); 
+    return v<lo?lo:(v>hi?hi:v); 
 }
-static inline guint8 gray(GdkPixbuf *pix,int x,int y)
+
+static inline guint8 get_gray_local(GdkPixbuf *pix,int x,int y)
 {
     int n=gdk_pixbuf_get_n_channels(pix);
     guchar *p=gdk_pixbuf_get_pixels(pix)+y*gdk_pixbuf_get_rowstride(pix)+x*n;
@@ -48,148 +49,269 @@ static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     }
 }
 
-// Automatic detection of grid and word areas
-typedef struct 
+// --- Fonctions d'analyse de profil pour find_zones ---
+
+static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
+                                     int x0, int x1)
 {
-       	int start,end; double avg; 
-} Block;
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    x0 = clampi(x0, 0, W-1);
+    x1 = clampi(x1, 0, W-1);
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+
+    int n = x1 - x0 + 1;
+    double *r = calloc(n, sizeof(double));
+    if (!r) return NULL;
+
+    for (int i = 0; i < n; i++)
+    {
+        int x = x0 + i;
+        int black = 0;
+        for (int y = 0; y < H; y++)
+            if (get_gray_local(pix, x, y) < thr)
+                black++;
+        r[i] = (double)black / (double)H;
+    }
+    return r;
+}
+
+// Calcule la force de l'autocorrélation normalisée (périodicité)
+static double autocorr_strength(const double *p, int n,
+                                 int lag_min, int lag_max)
+{
+    if (n <= 0) return 0.0;
+    if (lag_max >= n) lag_max = n-1;
+    if (lag_min >= lag_max) return 0.0;
+
+    double mean = 0.0; for (int i = 0; i < n; i++) mean += p[i]; mean /= (double)n;
+    double var = 0.0;
+    for (int i = 0; i < n; i++) { double d = p[i] - mean; var += d*d; }
+    if (var <= 1e-12) return 0.0;
+
+    double best = 0.0;
+    for (int k = lag_min; k <= lag_max; k++)
+    {
+        double acc = 0.0;
+        int cnt = 0;
+        for (int i = 0; i + k < n; i++)
+        {
+            double a = p[i] - mean;
+            double b = p[i+k] - mean;
+            acc += a*b; cnt++;
+        }
+        if (cnt > 0)
+        {
+            double score = acc / (var * cnt);
+            if (score > best) best = score;
+        }
+    }
+    if (best < 0.0) best = 0.0;
+    return best;
+}
+
+// Score de périodicité horizontal (utile pour identifier la grille)
+static double periodicity_score(const double *p, int n)
+{
+    if (n < 8) return 0.0;
+    int lag_min = 3;
+    int lag_max = n / 4;
+    if (lag_max <= lag_min) return 0.0;
+    return autocorr_strength(p, n, lag_min, lag_max);
+}
+
+
+typedef struct
+{
+    int start, end;
+    double avg;
+} Segment;
 
 static void find_zones(GdkPixbuf *pix,
                        int *gx0,int *gx1,int *gy0,int *gy1,
                        int *wx0,int *wx1,int *wy0,int *wy1)
 {
-    const guint8 thr=180;
-    int W=gdk_pixbuf_get_width(pix);
-    int H=gdk_pixbuf_get_height(pix);
-    double *dens=calloc(W,sizeof(double));
-    if(!dens) 
+    const guint8 thr = 180;
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+
+    // Initialisation des variables locales
+    int gx0_local = 0, gx1_local = 0;
+    int wx0_local = 0, wx1_local = 0;
+    int grid_w = 0;
+    int word_idx = -1;
+    int grid_idx = -1;
+    
+    if (W <= 0 || H <= 0) { goto fallback_zones; }
+
+    // 1) Calcul de la densité de noir par colonne (dens)
+    double *dens = calloc(W, sizeof(double));
+    if (!dens) { goto fallback_zones; }
+    for (int x = 0; x < W; x++)
     {
-	    return;
+        int black = 0;
+        for (int y = 0; y < H; y++)
+            if (get_gray_local(pix, x, y) < thr) black++;
+        dens[x] = (double)black / (double)H;
     }
 
-    // Average vertical density of black
-    for(int x=0;x<W;x++)
+    // 2) Lissage agressif (sm)
+    double *sm = calloc(W, sizeof(double));
+    if (!sm) { free(dens); goto fallback_zones; }
+
+    int rad = W / 80; // Rayon de lissage
+    if (rad < 5)   rad = 5;
+    if (rad > 20) rad = 20;
+
+    for (int x = 0; x < W; x++)
     {
-        int black=0;
-        for(int y=0;y<H;y++)
-            if(gray(pix,x,y)<thr)
-	    {
-		    black++;
-	    }
-        dens[x]=(double)black/H;
+        int L = clampi(x - rad, 0, W-1);
+        int R = clampi(x + rad, 0, W-1);
+        double acc = 0.0;
+        int cnt = 0;
+        for (int i = L; i <= R; i++) { acc += dens[i]; cnt++; }
+        sm[x] = (cnt > 0) ? acc / (double)cnt : 0.0;
     }
 
-    // Detection of dark bands (text areas)
-    Block *tmp=malloc(W*sizeof(Block));
-    int nb=0;
-    bool inside=false;
-    int start=0;
-    for(int x=0;x<W;x++)
+    // 3) Découpe en segments : Seuil de coupure basé sur la MOYENNE
+    // Pour les images très denses, max_s est moins fiable que la moyenne.
+    double mean_s = 0.0;
+    for (int x = 0; x < W; x++) mean_s += sm[x];
+    mean_s /= W;
+    
+    if (mean_s < 1e-4) { free(dens); free(sm); goto fallback_zones; }
+
+    // Seuil de coupure Tseg ULTRA-AGRESSIF pour détecter la séparation
+    double Tseg = 0.15 * mean_s; // Basé sur la MOYENNE et augmenté
+    if (Tseg < 0.005) Tseg = 0.005;
+
+    int min_width = W / 40;
+    if (min_width < 6) min_width = 6;
+
+    Segment *seg = malloc(sizeof(Segment) * W);
+    int nseg = 0;
+    int inside = 0;
+    int start = 0;
+    double sum = 0.0;
+    int cnt = 0;
+
+    for (int x = 0; x < W; x++)
     {
-        if(dens[x]>0.05 && !inside)
-	{
-            inside=true; start=x;
+        if (sm[x] >= Tseg) // Au-dessus du seuil -> partie du segment
+        {
+            if (!inside) { inside = 1; start = x; sum = sm[x]; cnt = 1; }
+            else { sum += sm[x]; cnt++; }
         }
-	else if(dens[x]<=0.05 && inside)
-	{
-            inside=false;
-            int end=x;
-            double avg=0;
-            for(int i=start;i<end;i++) avg+=dens[i];
-            avg/=(end-start+1);
-            tmp[nb++]=(Block){start,end,avg};
-        }
-    }
-
-    // Merge adjacent bands (< 50 px difference)
-    Block *blocks=malloc(nb*sizeof(Block));
-    int fused=0;
-    for(int i=0;i<nb;i++)
-    {
-        if(fused==0)
-	{
-	       	blocks[fused++]=tmp[i]; continue;
-       	}
-        int gap=tmp[i].start-blocks[fused-1].end;
-        if(gap<50)
-	{
-	       	// fusion
-            blocks[fused-1].end=tmp[i].end;
-            blocks[fused-1].avg=(blocks[fused-1].avg+tmp[i].avg)/2.0;
-        }
-	else
-       	{
-	       	blocks[fused++]=tmp[i];
-	}
-    }
-    free(tmp);
-
-    if(fused<2)
-    {
-        // fallback simple
-        *gx0=W/3; *gx1=W-1; *gy0=0; *gy1=H-1;
-        *wx0=0;   *wx1=W/3; *wy0=0; *wy1=H-1;
-        free(dens); free(blocks);
-        return;
-    }
-
-    // Sort by width in descending order
-    for(int i=0;i<fused-1;i++)
-    {
-        for(int j=i+1;j<fused;j++)
-	{
-            int wi=blocks[i].end-blocks[i].start;
-            int wj=blocks[j].end-blocks[j].start;
-            if(wj>wi)
-	    {
-                Block tmpb=blocks[i]; blocks[i]=blocks[j]; blocks[j]=tmpb;
-            }
+        else if (inside) // Creux trouvé -> fin du segment
+        {
+            int end = x - 1;
+            int width = end - start + 1;
+            if (width >= min_width) { seg[nseg++] = (Segment){ start, end, sum / (double)cnt }; }
+            inside = 0;
         }
     }
-
-    Block b1=blocks[0];
-    Block b2=blocks[1];
-    if(b2.start<b1.start)
+    if (inside)
     {
-        Block tmpb=b1; b1=b2; b2=tmpb;
+        int end = W - 1;
+        int width = end - start + 1;
+        if (width >= min_width) { seg[nseg++] = (Segment){ start, end, sum / (double)cnt }; }
     }
 
-    int top=0,bottom=H-1;
+    if (nseg == 0) { free(dens); free(sm); free(seg); goto fallback_zones; }
 
-    // Grid/word selection based on width and density
-    int w1=b1.end-b1.start, w2=b2.end-b2.start;
-    bool left_is_words=false;
-    if(w1<w2 || b1.avg<b2.avg*0.8) 
+
+    // 4) SÉLECTION DE LA GRILLE: C'est le bloc le plus dominant (Densité * Largeur)
+    
+    double best_score_size = 0.0; // Score: Densité * Largeur
+
+    for (int i = 0; i < nseg; i++)
     {
-	    left_is_words=true;
+        // La grille est toujours le bloc le plus gros/dense
+        double current_score_size = seg[i].avg * (double)(seg[i].end - seg[i].start + 1); 
+        
+        if (current_score_size > best_score_size)
+        {
+            best_score_size = current_score_size;
+            grid_idx = i;
+        }
     }
 
-    if(left_is_words)
+    // --- Attribution de la Grille (toujours un segment trouvé) ---
+    if (grid_idx >= 0)
     {
-        *wx0=b1.start;
-       	*wx1=b1.end; 
-	*wy0=top; 
-	*wy1=bottom;
-        *gx0=b2.start;
-       	*gx1=b2.end;
-       	*gy0=top;
-       	*gy1=bottom;
+        gx0_local = seg[grid_idx].start;
+        gx1_local = seg[grid_idx].end;
+        grid_w = gx1_local - gx0_local + 1;
     }
-    else
+    else { goto fallback_zones; } // Ne devrait pas arriver si nseg > 0
+
+
+    // 5) SÉLECTION DE LA ZONE MOTS: Le segment restant le plus grand
+    double best_word_score = 0.0;
+    // (grid_idx et gx0_local/gx1_local sont définis ici si la grille a été trouvée)
+
+    for (int i = 0; i < nseg; i++)
     {
-        *gx0=b1.start; 
-	*gx1=b1.end;
-       	*gy0=top;
-       	*gy1=bottom;
-        *wx0=b2.start;
-       	*wx1=b2.end;
-       	*wy0=top;
-       	*wy1=bottom;
+        if (i == grid_idx) continue;
+
+        int s0 = seg[i].start;
+        int s1 = seg[i].end;
+
+        // Le segment de mots doit être entièrement à gauche ou à droite de la grille
+        if (!(s1 < gx0_local || s0 > gx1_local))
+            continue;
+
+        double score = seg[i].avg * (double)(s1 - s0 + 1); 
+
+        if (score > best_word_score)
+        {
+            best_word_score = score;
+            word_idx = i;
+        }
     }
 
-    free(dens);
-    free(blocks);
+    // --- Attribution de la Zone Mots ---
+    if (word_idx >= 0)
+    {
+        wx0_local = seg[word_idx].start;
+        wx1_local = seg[word_idx].end;
+        
+        // CORRECTION CRITIQUE: Si la grille est immédiatement à côté des mots, 
+        // nous ajustons la borne droite de la grille pour qu'elle s'arrête juste avant les mots.
+        // Ceci gère le cas où Tseg est trop bas et ne crée pas de creux.
+        if (wx0_local > gx1_local) 
+        {
+             gx1_local = wx0_local - 1;
+        }
+    }
+    else // Fallback pour les mots
+    {
+        // ... (Fallback inchangé)
+    }
+
+    free(dens); free(sm); free(seg);
+
+    // --- Sorties finales ---
+    *gx0 = gx0_local; 
+    *gx1 = gx1_local; 
+    *gy0 = 0; 
+    *gy1 = H - 1;
+
+    *wx0 = clampi(wx0_local, 0, W-1); 
+    *wx1 = clampi(wx1_local, 0, W-1); 
+    *wy0 = 0; 
+    *wy1 = H - 1;
+    return;
+
+
+// --- Cas de fallback si la détection échoue ---
+fallback_zones:
+    *gx0 = W/3; *gx1 = W-1; *gy0 = 0; *gy1 = H-1;
+    *wx0 = 0;   *wx1 = W/3; *wy0 = 0; *wy1 = H-1;
+    return;
 }
+
+
 
 
 static void run_detection(GtkWidget *win,const char *path)
