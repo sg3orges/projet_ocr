@@ -5,7 +5,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <string.h>
-#include <unistd.h> 
+#include <unistd.h>
+#define LETTER_TARGET_W 48
+#define LETTER_TARGET_H 48
 
 // =======================================================
 // FONCTIONS UTILITAIRES LOCALES (STATIC)
@@ -32,10 +34,13 @@ static inline guint8 get_gray(GdkPixbuf *pix, int x, int y)
 static void put_rgb(GdkPixbuf *pix, int x, int y, guint8 R, guint8 G, guint8 B)
 {
     int W = gdk_pixbuf_get_width(pix), H = gdk_pixbuf_get_height(pix);
-    if(x < 0 || y < 0 || x >= W || y >= H) return;
+    if (x < 0 || y < 0 || x >= W || y >= H)
+        return;
     int n = gdk_pixbuf_get_n_channels(pix), rs = gdk_pixbuf_get_rowstride(pix);
     guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
-    p[0] = R; p[1] = G; p[2] = B;
+    p[0] = R;
+    p[1] = G;
+    p[2] = B;
 }
 
 static void draw_rect_thick(GdkPixbuf *pix, int x0, int y0, int x1, int y1,
@@ -64,18 +69,24 @@ static void draw_rect_thick(GdkPixbuf *pix, int x0, int y0, int x1, int y1,
 static int ensure_dir(const char *path)
 {
     struct stat st;
-    if (stat(path, &st) == 0) return S_ISDIR(st.st_mode) ? 0 : -1;
+    if (stat(path, &st) == 0)
+        return S_ISDIR(st.st_mode) ? 0 : -1;
     return mkdir(path, 0755);
 }
 
-static inline gboolean is_black_pixel(GdkPixbuf *img, int x, int y, guint8 black_thr) {
+static inline gboolean is_black_pixel(GdkPixbuf *img, int x, int y, guint8 black_thr)
+{
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
-    if (x < 0 || x >= W || y < 0 || y >= H) return FALSE;
+    if (x < 0 || x >= W || y < 0 || y >= H)
+        return FALSE;
     return get_gray(img, x, y) < black_thr;
 }
 
-typedef struct { int x, y; } Point;
+typedef struct
+{
+    int x, y;
+} Point;
 
 static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, int start_y,
                                  int *min_x, int *max_x, int *min_y, int *max_y,
@@ -87,8 +98,10 @@ static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, 
     stack[stack_idx++] = (Point){start_x, start_y};
     visited[start_y][start_x] = TRUE;
 
-    *min_x = start_x; *max_x = start_x;
-    *min_y = start_y; *max_y = start_y;
+    *min_x = start_x;
+    *max_x = start_x;
+    *min_y = start_y;
+    *max_y = start_y;
 
     int dx[] = {-1, 1, 0, 0};
     int dy[] = {0, 0, -1, 1};
@@ -97,10 +110,14 @@ static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, 
     {
         Point current = stack[--stack_idx];
 
-        if (current.x < *min_x) *min_x = current.x;
-        if (current.x > *max_x) *max_x = current.x;
-        if (current.y < *min_y) *min_y = current.y;
-        if (current.y > *max_y) *max_y = current.y;
+        if (current.x < *min_x)
+            *min_x = current.x;
+        if (current.x > *max_x)
+            *max_x = current.x;
+        if (current.y < *min_y)
+            *min_y = current.y;
+        if (current.y > *max_y)
+            *max_y = current.y;
 
         for (int i = 0; i < 4; i++)
         {
@@ -110,7 +127,8 @@ static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, 
             if (nx >= 0 && nx < img_width && ny >= 0 && ny < img_height &&
                 !visited[ny][nx] && is_black_pixel(img, nx, ny, black_thr))
             {
-                if (stack_idx < img_width * img_height) {
+                if (stack_idx < img_width * img_height)
+                {
                     visited[ny][nx] = TRUE;
                     stack[stack_idx++] = (Point){nx, ny};
                 }
@@ -118,6 +136,58 @@ static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, 
         }
     }
     g_free(stack);
+}
+
+// Sauvegarde une lettre en élargissant un peu la bbox
+static int save_letter_with_margin(GdkPixbuf *img, GdkPixbuf *disp,
+                                   int min_x, int min_y,
+                                   int max_x, int max_y,
+                                   guint8 R, guint8 G, guint8 B,
+                                   int letter_idx,
+                                   int margin)
+{
+    int W = gdk_pixbuf_get_width(img);
+    int H = gdk_pixbuf_get_height(img);
+
+    // On élargit le rectangle de "margin" pixels tout autour
+    int x0 = clampi(min_x - margin, 0, W - 1);
+    int y0 = clampi(min_y - margin, 0, H - 1);
+    int x1 = clampi(max_x + margin, 0, W - 1);
+    int y1 = clampi(max_y + margin, 0, H - 1);
+
+    int width  = x1 - x0 + 1;
+    int height = y1 - y0 + 1;
+    if (width <= 0 || height <= 0)
+        return letter_idx;
+
+    // Dessin du rectangle élargi sur l'image d'affichage
+    draw_rect_thick(disp, x0, y0, x1, y1, R, G, B, 1);
+
+    // Crop élargi depuis l'image source
+    GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, x0, y0, width, height);
+    if (sub)
+    {
+        // Redimensionnement à une taille fixe
+        GdkPixbuf *scaled = gdk_pixbuf_scale_simple(
+            sub,
+            LETTER_TARGET_W,
+            LETTER_TARGET_H,
+            GDK_INTERP_BILINEAR
+        );
+
+        if (scaled)
+        {
+            char path[512];
+            snprintf(path, sizeof(path), "cells/letter_%04d.png", letter_idx);
+            gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
+            g_object_unref(scaled);
+            letter_idx++;
+        }
+
+        g_object_unref(sub);
+    }
+
+    return letter_idx;
 }
 
 // =======================================================
@@ -129,95 +199,226 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             guint8 black_thr,
                             guint8 R, guint8 G, guint8 B)
 {
+    (void)black_thr; // on utilise STRICT_BLACK_THR à la place
+
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
 
-    // Clamping et vérification de la zone
-    gx0 = clampi(gx0, 0, W - 1); gx1 = clampi(gx1, 0, W - 1);
-    gy0 = clampi(gy0, 0, H - 1); gy1 = clampi(gy1, 0, H - 1);
-    
-    if (gx0 > gx1) { int t = gx0; gx0 = gx1; gx1 = t; }
-    if (gy0 > gy1) { int t = gy0; gy0 = gy1; gy1 = t; }
+    // Clamp de la zone grille
+    gx0 = clampi(gx0, 0, W - 1);
+    gx1 = clampi(gx1, 0, W - 1);
+    gy0 = clampi(gy0, 0, H - 1);
+    gy1 = clampi(gy1, 0, H - 1);
+    if (gx0 > gx1)
+    {
+        int t = gx0;
+        gx0 = gx1;
+        gx1 = t;
+    }
+    if (gy0 > gy1)
+    {
+        int t = gy0;
+        gy0 = gy1;
+        gy1 = t;
+    }
 
-    if (gx1 - gx0 < 5 || gy1 - gy0 < 5) return;
+    if (gx1 - gx0 < 5 || gy1 - gy0 < 5)
+        return;
 
     ensure_dir("cells");
 
-    // --- Définition des filtres de robustesse finals ---
-    const int MIN_AREA = 6;        // Aire minimale (pour éliminer les fragments de bruit)
-    const int MIN_DIM = 4;          // Dimension minimale (pour éliminer les lignes très fines)
-    const int MIN_HEIGHT_I = 10;    // Hauteur minimale pour accepter les 'I' minces
-    const double ASPECT_MAX = 3.0;  // Rapport max d'aspect
-    const int MAX_DIM_FACTOR = 29;   // 1/8 de la hauteur/largeur max (contre la fusion)
-    
-    // NOUVEAU SEUIL DE NOIR STRICT (Coupe les ponts de bruit gris et les lignes faibles)
-    const guint8 STRICT_BLACK_THR = 120; // 120 est plus restrictif que le standard 160
-    
-    // Allocation du tableau visited
-    gboolean **visited = g_malloc(H * sizeof(gboolean*));
-    for (int y = 0; y < H; y++) {
+    // --- Constantes de filtrage ---
+    const int MIN_AREA = 3;
+    const int MIN_WIDTH = 1;   // permet des lettres très fines
+    const int MIN_HEIGHT = 3;
+    const int MIN_HEIGHT_I = 10; // hauteur minimum pour "I" très fin
+    const double ASPECT_MAX = 4.0;
+    const int MAX_DIM_FACTOR = 20;
+    const guint8 STRICT_BLACK_THR = 120;
+
+    int grid_w = gx1 - gx0 + 1;
+    int grid_h = gy1 - gy0 + 1;
+
+    // --------------------------------------------------
+    // 1) Copie de l'image pour travailler dessus
+    // --------------------------------------------------
+    GdkPixbuf *work = gdk_pixbuf_copy(img);
+    if (!work)
+        return;
+
+    // --------------------------------------------------
+    // 2) Détection des traits de grille par projections
+    // --------------------------------------------------
+    int *col_sum = g_malloc0(grid_w * sizeof(int));
+    int *row_sum = g_malloc0(grid_h * sizeof(int));
+
+    // Pour mémoriser quelles colonnes/lignes sont des traits de grille
+    gboolean *is_vline = g_malloc0(W * sizeof(gboolean));
+    gboolean *is_hline = g_malloc0(H * sizeof(gboolean));
+
+    // Densité verticale (colonnes)
+    for (int x = gx0; x <= gx1; x++)
+    {
+        int idx_x = x - gx0;
+        int cnt = 0;
+        for (int y = gy0; y <= gy1; y++)
+        {
+            if (get_gray(img, x, y) < STRICT_BLACK_THR)
+                cnt++;
+        }
+        col_sum[idx_x] = cnt;
+    }
+
+    // Densité horizontale (lignes)
+    for (int y = gy0; y <= gy1; y++)
+    {
+        int idx_y = y - gy0;
+        int cnt = 0;
+        for (int x = gx0; x <= gx1; x++)
+        {
+            if (get_gray(img, x, y) < STRICT_BLACK_THR)
+                cnt++;
+        }
+        row_sum[idx_y] = cnt;
+    }
+
+    // Seuils : > 70% de noir sur la hauteur/largeur => trait de grille
+    double COL_DENSITY_THR = 0.7;
+    double ROW_DENSITY_THR = 0.7;
+
+    // On blanchit les traits VERTICAUX dans work
+    for (int x = gx0; x <= gx1; x++)
+    {
+        int idx_x = x - gx0;
+        if (col_sum[idx_x] >= (int)(COL_DENSITY_THR * grid_h))
+        {
+            is_vline[x] = TRUE; // colonne de grille
+            for (int y = gy0; y <= gy1; y++)
+                put_rgb(work, x, y, 255, 255, 255);
+        }
+    }
+
+    // On blanchit les traits HORIZONTAUX dans work
+    for (int y = gy0; y <= gy1; y++)
+    {
+        int idx_y = y - gy0;
+        if (row_sum[idx_y] >= (int)(ROW_DENSITY_THR * grid_w))
+        {
+            is_hline[y] = TRUE; // ligne de grille
+            for (int x = gx0; x <= gx1; x++)
+                put_rgb(work, x, y, 255, 255, 255);
+        }
+    }
+
+    g_free(col_sum);
+    g_free(row_sum);
+
+    // --------------------------------------------------
+    // 3) Flood-fill sur l'image "work" SANS les traits
+    // --------------------------------------------------
+    gboolean **visited = g_malloc(H * sizeof(gboolean *));
+    for (int y = 0; y < H; y++)
+    {
         visited[y] = g_malloc(W * sizeof(gboolean));
-        memset(visited[y], 0, W * sizeof(gboolean)); 
+        memset(visited[y], 0, W * sizeof(gboolean));
     }
 
     int letter_idx = 0;
-    
-    // Parcourir chaque pixel de la zone GRILLE
+
     for (int y = gy0; y <= gy1; y++)
     {
         for (int x = gx0; x <= gx1; x++)
         {
-            // Utiliser le seuil strict pour la détection initiale du pixel noir
-            if (is_black_pixel(img, x, y, STRICT_BLACK_THR) && !visited[y][x])
+            if (is_black_pixel(work, x, y, STRICT_BLACK_THR) && !visited[y][x])
             {
                 int min_x, max_x, min_y, max_y;
-                
-                // Utiliser le seuil strict pour le Flood Fill aussi
-                flood_fill_component(img, STRICT_BLACK_THR, x, y,
+
+                flood_fill_component(work, STRICT_BLACK_THR, x, y,
                                      &min_x, &max_x, &min_y, &max_y,
                                      visited, W, H);
 
-                int width = max_x - min_x + 1;
+                int width  = max_x - min_x + 1;
                 int height = max_y - min_y + 1;
-                int area = width * height; 
+                int area   = width * height;
 
-                // --- FILTRAGE DES COMPOSANTES CONNEXES ---
-                
-                // 1. FILTRE D'AIRE MINIMALE (Contre le bruit)
-                if (area < MIN_AREA) continue; 
-                
-                // 2. FILTRE DE DIMENSION MINIMALE
-                if (width < MIN_DIM || height < MIN_DIM) continue; 
-                
-                // 3. FILTRE D'EXCEPTION 'I' (Autorise les petits blobs s'ils sont très hauts)
-                if (area < MIN_AREA * 2 && height < MIN_HEIGHT_I) continue;
+                // 1) Vraiment trop petit (filtre fort sur l'aire)
+                const int MIN_STRONG_AREA = 50;  // à ajuster si besoin
+                if (area < MIN_STRONG_AREA)
+                    continue;
 
-                // 4. FILTRE DE TAILLE MAXIMALE (Contre les fusions qui dépassent une case)
-                if (width > W/MAX_DIM_FACTOR || height > H/MAX_DIM_FACTOR) continue; 
-                
-                // 5. FILTRE D'ASPECT (Contre les structures allongées)
-                double aspect_ratio = (double)width / (double)height;
-                if (aspect_ratio > ASPECT_MAX || aspect_ratio < (1.0 / ASPECT_MAX)) continue; 
-                
+                if (width < MIN_WIDTH || height < MIN_HEIGHT) continue;
+                if (width > W / MAX_DIM_FACTOR || height > H / MAX_DIM_FACTOR) continue;
 
-                // Si la composante passe tous les filtres, c'est une lettre
-                draw_rect_thick(disp, min_x, min_y, max_x, max_y, R, G, B, 1); 
+                // Filtre micro-blobs très compacts
+                if (width <= 4 && height <= 4)
+                    continue;
 
-                // Sauvegarde de la sous-image de la lettre
-                GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, min_x, min_y, width, height);
-                if (sub) {
-                    char path[512];
-                    snprintf(path, sizeof(path), "cells/letter_%04d.png", letter_idx++);
-                    gdk_pixbuf_save(sub, path, "png", NULL, NULL);
-                    g_object_unref(sub);
+                // 2) Vérifier si ça touche (ou frôle) une ligne / colonne de grille
+                gboolean touches_grid = FALSE;
+
+                // colonnes et voisines
+                for (int xx = min_x; xx <= max_x && !touches_grid; ++xx)
+                {
+                    for (int k = -1; k <= 1 && !touches_grid; ++k)
+                    {
+                        int cx = xx + k;
+                        if (cx >= 0 && cx < W && is_vline[cx])
+                            touches_grid = TRUE;
+                    }
                 }
+                // lignes et voisines
+                for (int yy = min_y; yy <= max_y && !touches_grid; ++yy)
+                {
+                    for (int k = -1; k <= 1 && !touches_grid; ++k)
+                    {
+                        int cy = yy + k;
+                        if (cy >= 0 && cy < H && is_hline[cy])
+                            touches_grid = TRUE;
+                    }
+                }
+
+                // Si collé à la grille et que ce n'est pas un gros bloc,
+                // on jette directement (bout de trait, intersection, etc.)
+                if (touches_grid && (width < 10 || height < 10 || area < 100))
+                    continue;
+
+                // 3) Forme de la composante
+
+                // Cas particulier : lettre très haute et très fine (ex: I)
+                // -> on l'accepte seulement si elle ne touche pas la grille
+                gboolean looks_like_I = (!touches_grid &&
+                                         height >= MIN_HEIGHT_I &&
+                                         width  <= 4);
+
+                // Si ce n'est PAS un I et que c'est très fin, on jette
+                if (!looks_like_I && (width <= 3 || height <= 3))
+                    continue;
+
+                // Ratio largeur/hauteur pour le reste
+                double aspect = (double)width / (double)height;
+                if (!looks_like_I &&
+                    (aspect > ASPECT_MAX || aspect < 1.0 / ASPECT_MAX))
+                {
+                    continue;
+                }
+
+                // Lettre validée -> helper qui élargit la bbox et sauvegarde
+                int margin = 3; // ajuste si tu veux plus ou moins de bord
+                letter_idx = save_letter_with_margin(img, disp,
+                                                     min_x, min_y, max_x, max_y,
+                                                     R, G, B,
+                                                     letter_idx, margin);
             }
         }
     }
 
-    // Libérer la mémoire
-    for (int y = 0; y < H; y++) {
+    // Libération
+    for (int y = 0; y < H; y++)
         g_free(visited[y]);
-    }
     g_free(visited);
+
+    g_free(is_vline);
+    g_free(is_hline);
+
+    g_object_unref(work);
 }
