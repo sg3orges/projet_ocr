@@ -1,6 +1,6 @@
 #include "networks.h"
 
-int main(int argc, char *argv[]) {
+void network_test(int argc, char *argv[]) {
     
     if (SDL_Init(SDL_INIT_VIDEO) < 0) errx(1, "Erreur SDL: %s", SDL_GetError());
 
@@ -42,5 +42,5 @@ int main(int argc, char *argv[]) {
 
     cleanup(&net);
     SDL_Quit();
-    return 0;
+
 }

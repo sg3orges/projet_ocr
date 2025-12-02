@@ -55,5 +55,5 @@ void cleanup(NeuralNetwork *net);
 double sigmoid(double x);
 double sigmoid_derivative(double x);
 double random_weight();
-
+void network_test();
 #endif
