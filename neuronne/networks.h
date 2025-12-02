@@ -11,7 +11,7 @@
 #include <time.h>
 
 // --- Paramètres ---
-#define NUM_EPOCHS 5000       
+#define NUM_EPOCHS 750       
 #define LEARNING_RATE 0.3   
 #define IMAGE_WIDTH 48    
 #define IMAGE_HEIGHT 48
@@ -21,7 +21,7 @@
 #define NUM_HIDDEN1 64
 #define NUM_HIDDEN2 32
 #define NUM_OUTPUTS 26
-#define NUM_TRAINING_SETS 26  // 1 image par lettre pour l'instant
+#define NUM_TRAINING_SETS 26*2  // 1 image par lettre pour l'instant
 
 // --- Structure ---
 typedef struct {

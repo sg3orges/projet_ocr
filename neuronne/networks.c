@@ -112,21 +112,29 @@ void load_dataset(double inputs[NUM_TRAINING_SETS][NUM_INPUTS],
     char filepath[1024];
     int idx = 0;
     
-    printf("Chargement des images (A1.png -> Z1.png)...\n");
+    printf("Chargement des images (A1..Z1 et A2..Z2)...\n");
 
-    for (char c = 'A'; c <= 'Z'; c++) {
-        sprintf(filepath, "%s/%c1.png", path, c);
+    // On ajoute une boucle pour gérer le numéro du fichier (1 et 2)
+    for (int version = 1; version <= 2; version++) {
         
-        if (idx >= NUM_TRAINING_SETS) break;
+        for (char c = 'A'; c <= 'Z'; c++) {
+            // Sécurité pour ne pas dépasser le tableau
+            if (idx >= NUM_TRAINING_SETS) break;
 
-        preprocess_image(filepath, inputs[idx]);
-        
-        for (int i = 0; i < NUM_OUTPUTS; i++) outputs[idx][i] = 0.0;
-        outputs[idx][c - 'A'] = 1.0;
-        
-        idx++;
+            // Modification du sprintf pour inclure la variable 'version'
+            // Exemple : dataset/A1.png puis dataset/A2.png au prochain tour
+            sprintf(filepath, "%s/%c%d.png", path, c, version);
+            
+            preprocess_image(filepath, inputs[idx]);
+            
+            // Configuration de la sortie attendue (Target)
+            for (int i = 0; i < NUM_OUTPUTS; i++) outputs[idx][i] = 0.0;
+            outputs[idx][c - 'A'] = 1.0; // La bonne lettre est à 1.0
+            
+            idx++;
+        }
     }
-    printf("Chargement terminé (%d images).\n", idx);
+    printf("Chargement terminé (%d images chargées).\n", idx);
 }
 
 // --- Coeur du Réseau (Forward & Backward) ---
