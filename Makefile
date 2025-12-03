@@ -3,7 +3,7 @@
 EXEC = ocr_project
 
 # Dossiers contenant les sources
-SRC_DIRS = rotations detectionV2 neuronne solver xnor
+SRC_DIRS = rotations interface detectionV2 neuronne solver xnor
 
 # Récupère tous les .c sauf ceux nommés main.c dans les sous-dossiers
 SUB_SRC = $(foreach dir,$(SRC_DIRS),$(filter-out $(dir)/main.c,$(wildcard $(dir)/*.c)))
@@ -32,7 +32,7 @@ SDL_CFLAGS = $(shell pkg-config --cflags sdl2 SDL2_image)
 SDL_LIBS   = $(shell pkg-config --libs   sdl2 SDL2_image)
 
 # Flags
-CFLAGS  = -Wall -Wextra -O2 -std=c11 $(GTK_CFLAGS) $(SDL_CFLAGS) -Irotations -IdetectionV2 -Ineuronne -Isolver -Ixnor
+CFLAGS  = -Wall -Wextra -O2 -std=c11 $(GTK_CFLAGS) $(SDL_CFLAGS) -Irotations -Iinterface -IdetectionV2 -Ineuronne -Isolver -Ixnor
 LDFLAGS = -lm $(GTK_LIBS) $(SDL_LIBS)
 
 

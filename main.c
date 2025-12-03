@@ -1,5 +1,6 @@
 #include <string.h>
 #include "rotations/gui.h"
+#include "interface/gui.h"
 #include "detectionV2/detection.h"
 #include "solver/solver.h"
 #include "neuronne/networks.h"
@@ -20,9 +21,13 @@ int main(int argc, char **argv)
             network_test(argc - 1, &argv[1]);
             return 0;
         }
+        if (strcmp(argv[1], "rotation")==0)
+        {
+            run_gui(argc,argv);
+            return 0;
+        }
+        
     }
-
-    // Aucun argument: lancement de l'interface de rotation
-    run_gui(argc, argv);
+    run_interface(argc,argv);
     return 0;
 }
