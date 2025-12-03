@@ -66,7 +66,8 @@ sanitize: clean $(EXEC)
 clean:
 	@echo "Cleaning object files and temporary folders..."
 	rm -f $(OBJ)
-	rm -rf cells letterinword
+	rm -f $(EXEC)
+	rm -rf cells letterinword images
 
 fclean: clean
 	@echo "Cleaning executable..."
