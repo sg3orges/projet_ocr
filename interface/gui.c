@@ -1,8 +1,11 @@
 #include "gui.h"
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <string.h>
+#include "../rotations/gui.h"
 
 static GtkWidget *main_window = NULL;
+static int launch_rotation = 0;
+static char selected_rotation_image[512] = {0};
 
 static void on_quit_clicked(GtkButton *button, gpointer user_data)
 {
@@ -24,6 +27,22 @@ static void on_back_clicked(GtkButton *button, gpointer user_data)
     (void)button;
     GtkWidget *image_window = GTK_WIDGET(user_data);
     gtk_widget_destroy(image_window);
+}
+
+static void on_choose_clicked(GtkButton *button, gpointer user_data)
+{
+    const char *img_path = user_data;
+    if (img_path) {
+        g_snprintf(selected_rotation_image, sizeof(selected_rotation_image), "%s", img_path);
+        launch_rotation = 1;
+    }
+    GtkWidget *top = gtk_widget_get_toplevel(GTK_WIDGET(button));
+    if (GTK_IS_WINDOW(top))
+        gtk_widget_destroy(top);
+    if (main_window)
+        gtk_widget_destroy(main_window);
+    g_free(user_data);
+    gtk_main_quit();
 }
 
 static void on_image_clicked(GtkButton *button, gpointer user_data)
@@ -105,6 +124,8 @@ static void on_image_clicked(GtkButton *button, gpointer user_data)
 
         GtkWidget *btn = gtk_button_new_with_label("Choisir");
         gtk_widget_set_halign(btn, GTK_ALIGN_CENTER);
+        char *dup_path = g_strdup(path);
+        g_signal_connect(btn, "clicked", G_CALLBACK(on_choose_clicked), dup_path);
         gtk_grid_attach(GTK_GRID(grid), btn, col, row + 1, 1, 1);
     }
 
@@ -143,7 +164,7 @@ void run_interface(int argc, char *argv[])
     gtk_label_set_justify(GTK_LABEL(title), GTK_JUSTIFY_CENTER);
     gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
 
-    GtkWidget *info = gtk_label_new("Ajoute ici tes widgets et callbacks.");
+    GtkWidget *info = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(info), 0.5);
     gtk_label_set_justify(GTK_LABEL(info), GTK_JUSTIFY_CENTER);
     gtk_box_pack_start(GTK_BOX(box), info, FALSE, FALSE, 0);
@@ -160,4 +181,10 @@ void run_interface(int argc, char *argv[])
 
     gtk_widget_show_all(window);
     gtk_main();
+
+    // Si un bouton "Choisir" a été cliqué, lancer l'interface de rotation avec l'image sélectionnée
+    if (launch_rotation && selected_rotation_image[0] != '\0') {
+        char *args[] = {"rotation", selected_rotation_image, NULL};
+        run_gui(2, args);
+    }
 }

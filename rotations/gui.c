@@ -18,6 +18,7 @@ static GdkPixbuf *original_pixbuf = NULL;
 static GdkPixbuf *current_display_pixbuf = NULL;
 
 static double current_angle = 0.0;
+static const char *startup_image_path = NULL;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -169,6 +170,23 @@ static void on_auto_rotate_clicked(GtkWidget *widget, gpointer user_data)
     if (!original_pixbuf) return;
     double skew = detect_skew_angle(original_pixbuf);
     gtk_range_set_value(GTK_RANGE(scale_widget), skew);
+}
+
+static void load_image_from_file(const char *f)
+{
+    if (!f) return;
+
+    if (original_pixbuf) g_object_unref(original_pixbuf);
+    if (current_display_pixbuf) g_object_unref(current_display_pixbuf);
+
+    original_pixbuf = gdk_pixbuf_new_from_file(f, NULL);
+    if (original_pixbuf) {
+        current_display_pixbuf = gdk_pixbuf_copy(original_pixbuf);
+        gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
+        g_snprintf(selected_image_path, sizeof(selected_image_path), "%s", f);
+
+        gtk_range_set_value(GTK_RANGE(scale_widget), 0.0);
+    }
 }
 
 // --------------------------------------------------
@@ -439,6 +457,9 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     else 
         g_snprintf(output_path, sizeof(output_path), "images/output_processed.png");
 
+    // Crée le dossier de sortie au besoin
+    g_mkdir_with_parents("images", 0755);
+
     GError *err = NULL;
     if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) 
         printf("[OK] Saved to: %s\n", output_path);
@@ -461,18 +482,7 @@ static void on_load_button_clicked(GtkWidget *widget, gpointer window)
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
         char *f = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-        
-        if (original_pixbuf) g_object_unref(original_pixbuf);
-        if (current_display_pixbuf) g_object_unref(current_display_pixbuf);
-
-        original_pixbuf = gdk_pixbuf_new_from_file(f, NULL);
-        if (original_pixbuf) {
-            current_display_pixbuf = gdk_pixbuf_copy(original_pixbuf);
-            gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
-            g_snprintf(selected_image_path, sizeof(selected_image_path), "%s", f);
-            
-            gtk_range_set_value(GTK_RANGE(scale_widget), 0.0);
-        }
+        load_image_from_file(f);
         g_free(f);
     }
     gtk_widget_destroy(dialog);
@@ -484,6 +494,7 @@ static void on_load_button_clicked(GtkWidget *widget, gpointer window)
 void run_gui(int argc, char *argv[])
 {
     gtk_init(&argc, &argv);
+    if (argc > 1) startup_image_path = argv[1];
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "OCR Cleaner (Final)");
     gtk_window_set_default_size(GTK_WINDOW(win), 900, 750);
@@ -529,5 +540,6 @@ void run_gui(int argc, char *argv[])
     gtk_box_pack_start(GTK_BOX(hbox), btn_quit, FALSE, FALSE, 5);
 
     gtk_widget_show_all(win);
+    if (startup_image_path) load_image_from_file(startup_image_path);
     gtk_main();
 }
