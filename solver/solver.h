@@ -16,4 +16,5 @@ int ChercheMot (const char *mot, char matrice[MAX][MAX],
 
 void ConvertirMajuscules(char *mot);
 
+void solver_test();
 #endif 

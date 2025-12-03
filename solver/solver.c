@@ -101,12 +101,12 @@ void ConvertirMajuscules(char *mot)//toUP
 }
 
 
-int main(int argc, char *argv[]) // this part call all fonction of the solver and print the final result
+void solver_test(int argc, char *argv[]) // this part call all fonction of the solver and print the final result
 {
     if (argc != 3)
     {
         printf("il manque des argument");
-        return 1;
+        
     }   
 
     char matrice[MAX][MAX];
@@ -130,5 +130,5 @@ int main(int argc, char *argv[]) // this part call all fonction of the solver an
         printf("Not found\n");
     }
 
-    return 0;
+    
 }

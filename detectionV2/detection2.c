@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <math.h>
+#include "detection.h"
+
 
 /* === Prototypes des fonctions externes (Doivent exister dans les autres fichiers) === */
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
@@ -359,7 +361,7 @@ static void on_open(GApplication *app,GFile **files,int n,const char *hint)
     g_free(path);
 }
 
-int main(int argc,char **argv)
+int detection_run_app(int argc,char **argv)
 {
     GtkApplication *app=gtk_application_new("com.detect.auto",G_APPLICATION_HANDLES_OPEN);
     g_signal_connect(app,"open",G_CALLBACK(on_open),NULL);

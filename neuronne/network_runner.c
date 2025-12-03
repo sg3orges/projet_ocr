@@ -1,13 +1,13 @@
 #include "networks.h"
 
-int main(int argc, char *argv[]) {
+void network_test(int argc, char *argv[]) {
     
     if (SDL_Init(SDL_INIT_VIDEO) < 0) errx(1, "Erreur SDL: %s", SDL_GetError());
 
     NeuralNetwork net;
     init_network(&net);
 
-	const char *save_file = "brain.bin";
+	const char *save_file = "neuronne/brain.bin";
 	
     if (!load_network(&net, save_file)) {
         printf(">>> Aucune sauvegarde trouvée. Entraînement nécessaire...\n");
@@ -42,5 +42,5 @@ int main(int argc, char *argv[]) {
 
     cleanup(&net);
     SDL_Quit();
-    return 0;
+
 }

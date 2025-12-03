@@ -1,9 +1,9 @@
-#ifndef GUI_H
-#define GUI_H
+#ifndef INTERFACE_GUI_H
+#define INTERFACE_GUI_H
 
 #include <gtk/gtk.h>
 
-// Main function that launches the graphical interface
-void run_gui(int argc, char *argv[]);
+// Lance une petite fenêtre GTK de démonstration
+void run_interface(int argc, char *argv[]);
 
 #endif
