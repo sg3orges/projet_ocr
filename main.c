@@ -1,4 +1,5 @@
-#include "interface/gui.h"
+#include <string.h>
+#include "rotations/gui.h"
 #include "detectionV2/detection.h"
 #include "solver/solver.h"
 #include "neuronne/networks.h"
@@ -15,9 +16,13 @@ int main(int argc, char **argv)
             return 0;
         }
         if (strcmp(argv[1], "neuron") == 0) {
-            network_test();
+            // Passe les arguments après "neuron" à network_test (image utilisateur optionnelle)
+            network_test(argc - 1, &argv[1]);
             return 0;
         }
     }
 
+    // Aucun argument: lancement de l'interface de rotation
+    run_gui(argc, argv);
+    return 0;
 }

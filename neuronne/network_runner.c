@@ -7,7 +7,7 @@ void network_test(int argc, char *argv[]) {
     NeuralNetwork net;
     init_network(&net);
 
-	const char *save_file = "brain.bin";
+	const char *save_file = "neuronne/brain.bin";
 	
     if (!load_network(&net, save_file)) {
         printf(">>> Aucune sauvegarde trouvée. Entraînement nécessaire...\n");
