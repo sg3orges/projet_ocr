@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include "../detectionV2/detection.h"
 
 static char selected_image_path[512] = {0};
 static GtkWidget *image_widget = NULL;
@@ -461,9 +462,12 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     g_mkdir_with_parents("images", 0755);
 
     GError *err = NULL;
-    if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) 
+    if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) {
         printf("[OK] Saved to: %s\n", output_path);
-    else { 
+        // Lance la détection sur l'image sauvegardée
+        char *detect_argv[] = {"detect", output_path, NULL};
+        detection_run_app(2, detect_argv);
+    } else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 
     }
@@ -531,7 +535,7 @@ void run_gui(int argc, char *argv[])
     g_signal_connect(btn_clean, "clicked", G_CALLBACK(on_clean_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_clean, FALSE, FALSE, 5);
 
-    GtkWidget *btn_save = gtk_button_new_with_label("Save");
+    GtkWidget *btn_save = gtk_button_new_with_label("Suivant");
     g_signal_connect(btn_save, "clicked", G_CALLBACK(on_save_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_save, FALSE, FALSE, 5);
 
