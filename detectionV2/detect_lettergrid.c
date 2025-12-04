@@ -138,13 +138,14 @@ static void flood_fill_component(GdkPixbuf *img, guint8 black_thr, int start_x, 
     g_free(stack);
 }
 
-// Sauvegarde une lettre en élargissant un peu la bbox
+// Sauvegarde une lettre en élargissant un peu la bbox, en la nommant par coordonnées ligne_colonne
 static int save_letter_with_margin(GdkPixbuf *img, GdkPixbuf *disp,
                                    int min_x, int min_y,
                                    int max_x, int max_y,
                                    guint8 R, guint8 G, guint8 B,
                                    int letter_idx,
-                                   int margin)
+                                   int margin,
+                                   int row_idx, int col_idx)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
@@ -178,7 +179,7 @@ static int save_letter_with_margin(GdkPixbuf *img, GdkPixbuf *disp,
         if (scaled)
         {
             char path[512];
-            snprintf(path, sizeof(path), "cells/letter_%04d.png", letter_idx);
+            snprintf(path, sizeof(path), "cells/letter_%02d_%02d.png", row_idx, col_idx);
             gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
             g_object_unref(scaled);
             letter_idx++;
@@ -314,7 +315,31 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     g_free(row_sum);
 
     // --------------------------------------------------
-    // 3) Flood-fill sur l'image "work" SANS les traits
+    // 3) Liste des lignes/colonnes de grille pour déterminer (row,col)
+    // --------------------------------------------------
+    int *vlines = g_malloc0((grid_w + 2) * sizeof(int));
+    int *hlines = g_malloc0((grid_h + 2) * sizeof(int));
+    int vcount = 0, hcount = 0;
+
+    for (int x = gx0; x <= gx1; x++)
+    {
+        if (is_vline[x] && (x == gx0 || !is_vline[x - 1]))
+        {
+            vlines[vcount++] = x;
+            while (x <= gx1 && is_vline[x]) x++;
+        }
+    }
+    for (int y = gy0; y <= gy1; y++)
+    {
+        if (is_hline[y] && (y == gy0 || !is_hline[y - 1]))
+        {
+            hlines[hcount++] = y;
+            while (y <= gy1 && is_hline[y]) y++;
+        }
+    }
+
+    // --------------------------------------------------
+    // 4) Flood-fill sur l'image "work" SANS les traits
     // --------------------------------------------------
     gboolean **visited = g_malloc(H * sizeof(gboolean *));
     for (int y = 0; y < H; y++)
@@ -403,11 +428,30 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                 }
 
                 // Lettre validée -> helper qui élargit la bbox et sauvegarde
+                // Indices de cellule via le centre du bounding box
+                int cx = (min_x + max_x) / 2;
+                int cy = (min_y + max_y) / 2;
+                // Index de cellule: nombre de lignes/colonnes de grille strictement à gauche/au-dessus moins 1
+                int col_idx = -1;
+                for (int i = 0; i < vcount; i++) {
+                    if (cx > vlines[i]) col_idx++;
+                    else break;
+                }
+                if (col_idx < 0) col_idx = 0;
+
+                int row_idx = -1;
+                for (int i = 0; i < hcount; i++) {
+                    if (cy > hlines[i]) row_idx++;
+                    else break;
+                }
+                if (row_idx < 0) row_idx = 0;
+
                 int margin = 3; // ajuste si tu veux plus ou moins de bord
                 letter_idx = save_letter_with_margin(img, disp,
                                                      min_x, min_y, max_x, max_y,
                                                      R, G, B,
-                                                     letter_idx, margin);
+                                                     letter_idx, margin,
+                                                     row_idx, col_idx);
             }
         }
     }
@@ -419,6 +463,8 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
 
     g_free(is_vline);
     g_free(is_hline);
+    g_free(vlines);
+    g_free(hlines);
 
     g_object_unref(work);
 }

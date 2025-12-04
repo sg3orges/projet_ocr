@@ -8,6 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <SDL2/SDL.h>
+#include "networks.h"
 #include "../detectionV2/detection.h"
 
 static char selected_image_path[512] = {0};
@@ -20,7 +24,6 @@ static GdkPixbuf *current_display_pixbuf = NULL;
 
 static double current_angle = 0.0;
 static const char *startup_image_path = NULL;
-
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -32,6 +35,298 @@ static void free_pixbuf_data(guchar *data, gpointer user_data)
 {
     (void)user_data;
     g_free(data);
+}
+
+// --------------------------------------------------
+// Utilitaires GRID / Réseau de neurones
+// --------------------------------------------------
+static int cmp_filenames(const void *a, const void *b)
+{
+    const char *fa = *(const char * const *)a;
+    const char *fb = *(const char * const *)b;
+    return strcmp(fa, fb);
+}
+
+static gboolean is_directory(const char *path)
+{
+    struct stat st;
+    return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+}
+
+// Parcourt cells/letter_XXXX.png, applique le réseau et écrit GRID
+static void generate_grid_from_cells(void)
+{
+    DIR *dir = opendir("cells");
+    if (!dir) {
+        printf("[Error] Dossier cells introuvable, impossible de construire GRID.\n");
+        return;
+    }
+
+    size_t cap = 32, count = 0;
+    char **files = malloc(cap * sizeof(char *));
+    if (!files) { closedir(dir); return; }
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strncmp(ent->d_name, "letter_", 7) == 0 && strstr(ent->d_name, ".png")) {
+            if (count >= cap) {
+                cap *= 2;
+                char **tmp = realloc(files, cap * sizeof(char *));
+                if (!tmp) { free(files); closedir(dir); return; }
+                files = tmp;
+            }
+            files[count++] = strdup(ent->d_name);
+        }
+    }
+    closedir(dir);
+
+    if (count == 0) {
+        printf("[Info] Aucun fichier letter_XXXX.png trouvé dans cells/.\n");
+        free(files);
+        return;
+    }
+
+    qsort(files, count, sizeof(char *), cmp_filenames);
+
+    // Déduit la taille de la grille via les indices: 0000 => (row=0, col=0), 0001 => (0,1)
+    int max_row = -1;
+    int max_col = -1;
+    int *rows = malloc(count * sizeof(int));
+    int *cols = malloc(count * sizeof(int));
+    if (!rows || !cols) {
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        int r = -1, c = -1;
+        if (sscanf(files[i], "letter_%d_%d", &r, &c) == 2) {
+            rows[i] = r;
+            cols[i] = c;
+            if (rows[i] > max_row) max_row = rows[i];
+            if (cols[i] > max_col) max_col = cols[i];
+        } else {
+            rows[i] = cols[i] = -1;
+        }
+    }
+
+    int grid_rows = max_row + 1;
+    int grid_cols = max_col + 1;
+    if (grid_rows <= 0 || grid_cols <= 0) {
+        printf("[Error] Dimensions de grille invalides.\n");
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+
+    // Initialise GRID avec des ?
+    char *grid_chars = malloc((size_t)grid_rows * (size_t)grid_cols);
+    if (!grid_chars) {
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+    memset(grid_chars, '?', (size_t)grid_rows * (size_t)grid_cols);
+
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        printf("[Error] SDL init failed: %s\n", SDL_GetError());
+        free(grid_chars);
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+
+    NeuralNetwork net;
+    init_network(&net);
+    if (!load_network(&net, "neuronne/brain.bin")) {
+        printf("[Warn] Aucun brain.bin, entraînement requis. Abandon génération GRID.\n");
+        cleanup(&net);
+        SDL_Quit();
+        free(grid_chars);
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+
+    // Création/troncature du fichier GRID à la racine
+    FILE *grid = fopen("GRID", "w");
+    if (!grid) {
+        printf("[Error] Impossible d'ouvrir GRID en écriture.\n");
+        cleanup(&net);
+        SDL_Quit();
+        free(grid_chars);
+        free(rows); free(cols);
+        for (size_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return;
+    }
+
+    // Remplit la grille avec les prédictions aux bonnes coordonnées
+    for (size_t i = 0; i < count; i++) {
+        int r = rows[i];
+        int c = cols[i];
+        if (r >= 0 && c >= 0) {
+            char path[256];
+            snprintf(path, sizeof(path), "cells/%s", files[i]);
+            double conf = 0.0;
+            char letter = predict(&net, path, &conf);
+            if (r < grid_rows && c < grid_cols)
+                grid_chars[r * grid_cols + c] = letter;
+        }
+    }
+
+    // Écriture dans GRID
+    
+    for (int r = 0; r < grid_rows; r++) {
+        for (int c = 0; c < grid_cols; c++)
+            fputc(grid_chars[r * grid_cols + c], grid);
+        fputc('\n', grid);
+    }
+
+    fclose(grid);
+    cleanup(&net);
+    SDL_Quit();
+
+    free(grid_chars);
+    free(rows); free(cols);
+    for (size_t i = 0; i < count; i++) free(files[i]);
+    free(files);
+    printf("[OK] GRID généré à la racine (./GRID) en %dx%d.\n", grid_rows, grid_cols);
+}
+
+// Parcourt letterInWord/word_xxx/letter_yyy.png et écrit GRID_Word (1 ligne par mot)
+static void generate_words_from_letterInWord(void)
+{
+    DIR *dir = opendir("letterInWord");
+    if (!dir) {
+        printf("[Info] Dossier letterInWord introuvable, saut de GRID_Word.\n");
+        return;
+    }
+
+    size_t wcap = 16, wcount = 0;
+    char **words = malloc(wcap * sizeof(char *));
+    if (!words) { closedir(dir); return; }
+
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strncmp(ent->d_name, "word_", 5) == 0) {
+            char path[256];
+            snprintf(path, sizeof(path), "letterInWord/%s", ent->d_name);
+            if (is_directory(path)) {
+                if (wcount >= wcap) {
+                    wcap *= 2;
+                    char **tmp = realloc(words, wcap * sizeof(char *));
+                    if (!tmp) { free(words); closedir(dir); return; }
+                    words = tmp;
+                }
+                words[wcount++] = strdup(path);
+            }
+        }
+    }
+    closedir(dir);
+
+    if (wcount == 0) {
+        printf("[Info] Aucun mot trouvé dans letterInWord/.\n");
+        free(words);
+        return;
+    }
+
+    qsort(words, wcount, sizeof(char *), cmp_filenames);
+
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        printf("[Error] SDL init failed: %s\n", SDL_GetError());
+        for (size_t i = 0; i < wcount; i++) free(words[i]);
+        free(words);
+        return;
+    }
+
+    NeuralNetwork net;
+    init_network(&net);
+    if (!load_network(&net, "neuronne/brain.bin")) {
+        printf("[Warn] Aucun brain.bin, génération GRID_Word abandonnée.\n");
+        cleanup(&net);
+        SDL_Quit();
+        for (size_t i = 0; i < wcount; i++) free(words[i]);
+        free(words);
+        return;
+    }
+
+    FILE *f = fopen("GRID_Word", "w");
+    if (!f) {
+        printf("[Error] Impossible d'ouvrir GRID_Word en écriture.\n");
+        cleanup(&net);
+        SDL_Quit();
+        for (size_t i = 0; i < wcount; i++) free(words[i]);
+        free(words);
+        return;
+    }
+
+    for (size_t wi = 0; wi < wcount; wi++) {
+        DIR *wdir = opendir(words[wi]);
+        if (!wdir) continue;
+
+        size_t lcap = 16, lcount = 0;
+        char **letters = malloc(lcap * sizeof(char *));
+        if (!letters) { closedir(wdir); continue; }
+
+        struct dirent *lent;
+        while ((lent = readdir(wdir)) != NULL) {
+            if (strncmp(lent->d_name, "letter_", 7) == 0 && strstr(lent->d_name, ".png")) {
+                if (lcount >= lcap) {
+                    lcap *= 2;
+                    char **tmp = realloc(letters, lcap * sizeof(char *));
+                    if (!tmp) { free(letters); closedir(wdir); goto next_word; }
+                    letters = tmp;
+                }
+                letters[lcount++] = strdup(lent->d_name);
+            }
+        }
+        closedir(wdir);
+
+        if (lcount == 0) {
+            free(letters);
+            goto next_word;
+        }
+
+        qsort(letters, lcount, sizeof(char *), cmp_filenames);
+
+        char *line = malloc(lcount + 1);
+        if (!line) {
+            for (size_t i = 0; i < lcount; i++) free(letters[i]);
+            free(letters);
+            goto next_word;
+        }
+
+        for (size_t li = 0; li < lcount; li++) {
+            char path[512];
+            snprintf(path, sizeof(path), "%s/%s", words[wi], letters[li]);
+            double conf = 0.0;
+            char letter = predict(&net, path, &conf);
+            line[li] = letter;
+            free(letters[li]);
+        }
+        line[lcount] = '\0';
+        free(letters);
+
+        fprintf(f, "%s\n", line);
+        free(line);
+
+    next_word:
+        ;
+    }
+
+    fclose(f);
+    cleanup(&net);
+    SDL_Quit();
+    for (size_t i = 0; i < wcount; i++) free(words[i]);
+    free(words);
+    printf("[OK] GRID_Word généré à la racine (./GRID_Word).\n");
 }
 
 // --------------------------------------------------
@@ -467,6 +762,10 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         // Lance la détection sur l'image sauvegardée
         char *detect_argv[] = {"detect", output_path, NULL};
         detection_run_app(2, detect_argv);
+        // Après détection, génère le fichier GRID à partir des cells
+        generate_grid_from_cells();
+        // Génère GRID_Word à partir de letterInWord
+        generate_words_from_letterInWord();
     } else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 

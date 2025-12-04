@@ -68,6 +68,7 @@ clean:
 	rm -f $(OBJ)
 	rm -f $(EXEC)
 	rm -rf cells letterInWord images
+	rm -f GRID GRID_Word
 
 fclean: clean
 	@echo "Cleaning executable..."
