@@ -1,6 +1,6 @@
 #include "networks.h"
 
-// --- Maths & Utilitaires ---
+// Maths
 
 double random_weight() {
     return ((double)rand() / (double)RAND_MAX) - 0.5;
@@ -14,49 +14,56 @@ double sigmoid_derivative(double x) {
     return x * (1.0 - x);
 }
 
-// --- Initialisation (Méthode Xavier) ---
+void softmax(double *input, int n) {
+    double max = input[0];
+    for (int i = 1; i < n; i++) {
+        if (input[i] > max) max = input[i];
+    }
+
+    double sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        input[i] = exp(input[i] - max); 
+        sum += input[i];
+    }
+
+    for (int i = 0; i < n; i++) {
+        input[i] /= sum;
+    }
+}
+
+// Init
 
 void init_network(NeuralNetwork *net) {
     srand(time(NULL));
 
-    net->hidden1_output = (double *)malloc(NUM_HIDDEN1 * sizeof(double));
-    net->hidden2_output = (double *)malloc(NUM_HIDDEN2 * sizeof(double));
+    net->hidden_output = (double *)malloc(NUM_HIDDEN * sizeof(double));
     net->final_output = (double *)malloc(NUM_OUTPUTS * sizeof(double));
 
-    net->biases_h1 = (double *)calloc(NUM_HIDDEN1, sizeof(double));
-    net->biases_h2 = (double *)calloc(NUM_HIDDEN2, sizeof(double));
+    net->biases_h = (double *)calloc(NUM_HIDDEN, sizeof(double));
     net->biases_o = (double *)calloc(NUM_OUTPUTS, sizeof(double));
 
+    // Input -> Hidden
     double scale1 = 1.0 / sqrt(NUM_INPUTS);
-    net->weights_ih1 = (double **)malloc(NUM_INPUTS * sizeof(double *));
+    net->weights_ih = (double **)malloc(NUM_INPUTS * sizeof(double *));
     for (int i = 0; i < NUM_INPUTS; i++) {
-        net->weights_ih1[i] = (double *)malloc(NUM_HIDDEN1 * sizeof(double));
-        for (int j = 0; j < NUM_HIDDEN1; j++) {
-            net->weights_ih1[i][j] = random_weight() * scale1;
+        net->weights_ih[i] = (double *)malloc(NUM_HIDDEN * sizeof(double));
+        for (int j = 0; j < NUM_HIDDEN; j++) {
+            net->weights_ih[i][j] = random_weight() * scale1;
         }
     }
 
-    double scale2 = 1.0 / sqrt(NUM_HIDDEN1);
-    net->weights_h1h2 = (double **)malloc(NUM_HIDDEN1 * sizeof(double *));
-    for (int i = 0; i < NUM_HIDDEN1; i++) {
-        net->weights_h1h2[i] = (double *)malloc(NUM_HIDDEN2 * sizeof(double));
-        for (int j = 0; j < NUM_HIDDEN2; j++) {
-            net->weights_h1h2[i][j] = random_weight() * scale2;
-        }
-    }
-
-    double scale3 = 1.0 / sqrt(NUM_HIDDEN2);
-    net->weights_h2o = (double **)malloc(NUM_HIDDEN2 * sizeof(double *));
-    for (int i = 0; i < NUM_HIDDEN2; i++) {
-        net->weights_h2o[i] = (double *)malloc(NUM_OUTPUTS * sizeof(double));
+    // Hidden -> Output
+    double scale2 = 1.0 / sqrt(NUM_HIDDEN);
+    net->weights_ho = (double **)malloc(NUM_HIDDEN * sizeof(double *));
+    for (int i = 0; i < NUM_HIDDEN; i++) {
+        net->weights_ho[i] = (double *)malloc(NUM_OUTPUTS * sizeof(double));
         for (int j = 0; j < NUM_OUTPUTS; j++) {
-            net->weights_h2o[i][j] = random_weight() * scale3;
+            net->weights_ho[i][j] = random_weight() * scale2;
         }
     }
 }
 
-// --- Traitement d'Image (Avec Debug Visuel) ---
-
+// traitment of picture
 void preprocess_image(const char *filepath, double *input_data) {
     SDL_Surface *surface = IMG_Load(filepath);
     if (!surface) {
@@ -65,37 +72,24 @@ void preprocess_image(const char *filepath, double *input_data) {
         return;
     }
 
-    Uint32 rmask = 0x00FF0000;
-    Uint32 gmask = 0x0000FF00;
-    Uint32 bmask = 0x000000FF;
-    Uint32 amask = 0xFF000000;
-
+    // Standardisation format
     SDL_Surface *dest = SDL_CreateRGBSurface(0, IMAGE_WIDTH, IMAGE_HEIGHT, 32, 
-                                             rmask, gmask, bmask, amask);
+                                             0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
     
     SDL_FillRect(dest, NULL, SDL_MapRGB(dest->format, 255, 255, 255));
-    
-    if (SDL_BlitScaled(surface, NULL, dest, NULL) != 0) {
-        warnx("Erreur redimensionnement : %s", SDL_GetError());
-    }
+    SDL_BlitScaled(surface, NULL, dest, NULL);
 
     SDL_LockSurface(dest);
     Uint32 *pixels = (Uint32 *)dest->pixels;
     int i = 0;
-    
 
     for (int y = 0; y < IMAGE_HEIGHT; y++) {
         for (int x = 0; x < IMAGE_WIDTH; x++) {
             Uint32 pixel = pixels[y * dest->w + x];
             Uint8 r, g, b;
             SDL_GetRGB(pixel, dest->format, &r, &g, &b);
-            
             double avg = (r + g + b) / 3.0;
-
-            int isActive = (avg < 200); 
-            
-            input_data[i++] = isActive ? 1.0 : 0.0;
-
+            input_data[i++] = (avg < 200) ? 1.0 : 0.0; 
         }
     }
 
@@ -104,105 +98,93 @@ void preprocess_image(const char *filepath, double *input_data) {
     SDL_FreeSurface(dest);
 }
 
-// --- Chargement Dataset ---
-
+// Loading dataset
 void load_dataset(double inputs[NUM_TRAINING_SETS][NUM_INPUTS],
                   double outputs[NUM_TRAINING_SETS][NUM_OUTPUTS],
                   const char *path) {
     char filepath[1024];
     int idx = 0;
     
-    printf("Chargement des images (A1..Z1 et A2..Z2)...\n");
-
-    // On ajoute une boucle pour gérer le numéro du fichier (1 et 2)
+    printf("Chargement des images...\n");
     for (int version = 1; version <= 2; version++) {
-        
         for (char c = 'A'; c <= 'Z'; c++) {
-            // Sécurité pour ne pas dépasser le tableau
             if (idx >= NUM_TRAINING_SETS) break;
-
-            // Modification du sprintf pour inclure la variable 'version'
-            // Exemple : dataset/A1.png puis dataset/A2.png au prochain tour
             sprintf(filepath, "%s/%c%d.png", path, c, version);
             
             preprocess_image(filepath, inputs[idx]);
             
-            // Configuration de la sortie attendue (Target)
             for (int i = 0; i < NUM_OUTPUTS; i++) outputs[idx][i] = 0.0;
-            outputs[idx][c - 'A'] = 1.0; // La bonne lettre est à 1.0
-            
+            outputs[idx][c - 'A'] = 1.0;
             idx++;
         }
     }
-    printf("Chargement terminé (%d images chargées).\n", idx);
+    printf("Dataset chargé : %d images.\n", idx);
 }
 
-// --- Coeur du Réseau (Forward & Backward) ---
+// neuron
 
 void forward_pass(NeuralNetwork *net, double *inputs) {
-    for (int j = 0; j < NUM_HIDDEN1; j++) {
-        double sum = net->biases_h1[j];
+    // 1. Input -> Hidden (Sigmoid)
+    for (int j = 0; j < NUM_HIDDEN; j++) {
+        double sum = net->biases_h[j];
         for (int k = 0; k < NUM_INPUTS; k++) 
-            sum += inputs[k] * net->weights_ih1[k][j];
-        net->hidden1_output[j] = sigmoid(sum);
+            sum += inputs[k] * net->weights_ih[k][j];
+        net->hidden_output[j] = sigmoid(sum);
     }
-    for (int j = 0; j < NUM_HIDDEN2; j++) {
-        double sum = net->biases_h2[j];
-        for (int k = 0; k < NUM_HIDDEN1; k++) 
-            sum += net->hidden1_output[k] * net->weights_h1h2[k][j];
-        net->hidden2_output[j] = sigmoid(sum);
-    }
+
+    // 2. Hidden -> Output (Raw Logits -> Softmax)
     for (int j = 0; j < NUM_OUTPUTS; j++) {
         double sum = net->biases_o[j];
-        for (int k = 0; k < NUM_HIDDEN2; k++) 
-            sum += net->hidden2_output[k] * net->weights_h2o[k][j];
-        net->final_output[j] = sigmoid(sum);
+        for (int k = 0; k < NUM_HIDDEN; k++) 
+            sum += net->hidden_output[k] * net->weights_ho[k][j];
+        net->final_output[j] = sum; 
     }
+
+    softmax(net->final_output, NUM_OUTPUTS);
 }
 
 double backward_pass(NeuralNetwork *net, double *inputs, double *targets) {
     double out_deltas[NUM_OUTPUTS];
-    double h2_deltas[NUM_HIDDEN2];
-    double h1_deltas[NUM_HIDDEN1];
+    double hidden_deltas[NUM_HIDDEN];
     double loss = 0.0;
 
     for (int j = 0; j < NUM_OUTPUTS; j++) {
-        double err = targets[j] - net->final_output[j];
-        loss += 0.5 * err * err;
-        out_deltas[j] = err * sigmoid_derivative(net->final_output[j]);
+        double output = net->final_output[j];
+        if (targets[j] == 1.0) {
+            loss -= log(output + 1e-15); 
+        }
+
+        out_deltas[j] = (targets[j] - output); 
     }
 
-    for (int j = 0; j < NUM_HIDDEN2; j++) {
+    for (int j = 0; j < NUM_HIDDEN; j++) {
         double err = 0.0;
-        for (int k = 0; k < NUM_OUTPUTS; k++) err += out_deltas[k] * net->weights_h2o[j][k];
-        h2_deltas[j] = err * sigmoid_derivative(net->hidden2_output[j]);
+        for (int k = 0; k < NUM_OUTPUTS; k++) {
+            err += out_deltas[k] * net->weights_ho[j][k];
+        }
+        hidden_deltas[j] = err * sigmoid_derivative(net->hidden_output[j]);
     }
 
-    for (int j = 0; j < NUM_HIDDEN1; j++) {
-        double err = 0.0;
-        for (int k = 0; k < NUM_HIDDEN2; k++) err += h2_deltas[k] * net->weights_h1h2[j][k];
-        h1_deltas[j] = err * sigmoid_derivative(net->hidden1_output[j]);
-    }
-
+    // update weight Hidden -> Output
     for (int k = 0; k < NUM_OUTPUTS; k++) {
         net->biases_o[k] += LEARNING_RATE * out_deltas[k];
-        for (int j = 0; j < NUM_HIDDEN2; j++) 
-            net->weights_h2o[j][k] += LEARNING_RATE * out_deltas[k] * net->hidden2_output[j];
+        for (int j = 0; j < NUM_HIDDEN; j++) {
+            net->weights_ho[j][k] += LEARNING_RATE * out_deltas[k] * net->hidden_output[j];
+        }
     }
-    for (int k = 0; k < NUM_HIDDEN2; k++) {
-        net->biases_h2[k] += LEARNING_RATE * h2_deltas[k];
-        for (int j = 0; j < NUM_HIDDEN1; j++) 
-            net->weights_h1h2[j][k] += LEARNING_RATE * h2_deltas[k] * net->hidden1_output[j];
+
+    // update weight Input -> Hidden
+    for (int k = 0; k < NUM_HIDDEN; k++) {
+        net->biases_h[k] += LEARNING_RATE * hidden_deltas[k];
+        for (int j = 0; j < NUM_INPUTS; j++) {
+            net->weights_ih[j][k] += LEARNING_RATE * hidden_deltas[k] * inputs[j];
+        }
     }
-    for (int k = 0; k < NUM_HIDDEN1; k++) {
-        net->biases_h1[k] += LEARNING_RATE * h1_deltas[k];
-        for (int j = 0; j < NUM_INPUTS; j++) 
-            net->weights_ih1[j][k] += LEARNING_RATE * h1_deltas[k] * inputs[j];
-    }
+
     return loss;
 }
 
-// --- Prédiction ---
+// Prediction
 
 char predict(NeuralNetwork *net, const char *filepath, double *confidence) {
     double input[NUM_INPUTS];
@@ -222,8 +204,6 @@ char predict(NeuralNetwork *net, const char *filepath, double *confidence) {
     *confidence = max_val * 100.0; 
     return (char)('A' + max_idx);
 }
-
-// --- Entraînement ---
 
 void shuffle(int *array, size_t n) {
     if (n > 1) {
@@ -273,19 +253,25 @@ void train_network(NeuralNetwork *net, const char *path) {
     free(targets);
 }
 
-// --- Sauvegarde / Chargement ---
+// Save
 
 void save_network(NeuralNetwork *net, const char *filename) {
     FILE *f = fopen(filename, "wb");
-    if (!f) return;
+    if (!f) {
+        warn("Impossible d'ouvrir le fichier de sauvegarde %s", filename);
+        return;
+    }
     
-    fwrite(net->biases_h1, sizeof(double), NUM_HIDDEN1, f);
-    fwrite(net->biases_h2, sizeof(double), NUM_HIDDEN2, f);
+    fwrite(net->biases_h, sizeof(double), NUM_HIDDEN, f);
     fwrite(net->biases_o, sizeof(double), NUM_OUTPUTS, f);
     
-    for(int i=0; i<NUM_INPUTS; i++) fwrite(net->weights_ih1[i], sizeof(double), NUM_HIDDEN1, f);
-    for(int i=0; i<NUM_HIDDEN1; i++) fwrite(net->weights_h1h2[i], sizeof(double), NUM_HIDDEN2, f);
-    for(int i=0; i<NUM_HIDDEN2; i++) fwrite(net->weights_h2o[i], sizeof(double), NUM_OUTPUTS, f);
+    for(int i = 0; i < NUM_INPUTS; i++) {
+        fwrite(net->weights_ih[i], sizeof(double), NUM_HIDDEN, f);
+    }
+
+    for(int i = 0; i < NUM_HIDDEN; i++) {
+        fwrite(net->weights_ho[i], sizeof(double), NUM_OUTPUTS, f);
+    }
     
     fclose(f);
     printf("Réseau sauvegardé dans '%s'.\n", filename);
@@ -295,23 +281,46 @@ int load_network(NeuralNetwork *net, const char *filename) {
     FILE *f = fopen(filename, "rb");
     if (!f) return 0; 
 
-    fread(net->biases_h1, sizeof(double), NUM_HIDDEN1, f);
-    fread(net->biases_h2, sizeof(double), NUM_HIDDEN2, f);
-    fread(net->biases_o, sizeof(double), NUM_OUTPUTS, f);
+    size_t res = 0;
+
+    res += fread(net->biases_h, sizeof(double), NUM_HIDDEN, f);
+    res += fread(net->biases_o, sizeof(double), NUM_OUTPUTS, f);
     
-    for(int i=0; i<NUM_INPUTS; i++) fread(net->weights_ih1[i], sizeof(double), NUM_HIDDEN1, f);
-    for(int i=0; i<NUM_HIDDEN1; i++) fread(net->weights_h1h2[i], sizeof(double), NUM_HIDDEN2, f);
-    for(int i=0; i<NUM_HIDDEN2; i++) fread(net->weights_h2o[i], sizeof(double), NUM_OUTPUTS, f);
+    for(int i = 0; i < NUM_INPUTS; i++) {
+        res += fread(net->weights_ih[i], sizeof(double), NUM_HIDDEN, f);
+    }
+
+    for(int i = 0; i < NUM_HIDDEN; i++) {
+        res += fread(net->weights_ho[i], sizeof(double), NUM_OUTPUTS, f);
+    }
     
     fclose(f);
+
+    if (res == 0) {
+        printf("Erreur: Le fichier de sauvegarde semble corrompu ou vide.\n");
+        return 0;
+    }
+
     printf("Réseau chargé depuis '%s'.\n", filename);
     return 1; 
 }
 
+
 void cleanup(NeuralNetwork *net) {
-    free(net->hidden1_output); free(net->hidden2_output); free(net->final_output);
-    free(net->biases_h1); free(net->biases_h2); free(net->biases_o);
-    for (int i=0; i<NUM_INPUTS; i++) free(net->weights_ih1[i]); free(net->weights_ih1);
-    for (int i=0; i<NUM_HIDDEN1; i++) free(net->weights_h1h2[i]); free(net->weights_h1h2);
-    for (int i=0; i<NUM_HIDDEN2; i++) free(net->weights_h2o[i]); free(net->weights_h2o);
+    free(net->hidden_output); 
+    free(net->final_output);
+    free(net->biases_h); 
+    free(net->biases_o);
+	
+    for (int i = 0; i < NUM_INPUTS; i++) {
+        free(net->weights_ih[i]);
+    }
+    free(net->weights_ih);
+
+    for (int i = 0; i < NUM_HIDDEN; i++) {
+        free(net->weights_ho[i]);
+    }
+    free(net->weights_ho);
 }
+
+
