@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include "networks.h"
 #include "../detectionV2/detection.h"
+#include "../solver/solver.h"
 
 static char selected_image_path[512] = {0};
 static GtkWidget *image_widget = NULL;
@@ -766,6 +767,8 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         generate_grid_from_cells();
         // Génère GRID_Word à partir de letterInWord
         generate_words_from_letterInWord();
+        // Lance le solver sur la grille et les mots détectés
+        solver_run_words("GRID", "GRID_Word");
     } else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 

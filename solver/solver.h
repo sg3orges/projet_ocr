@@ -4,17 +4,18 @@
 #include <stdio.h>
 #include <string.h>
 
-#define MAX 100
+#define SOLVER_MAX 100
 #define TAILLE_MAX 100
 
-int CreaMatrice(const char *Fichier, char matrice[MAX][MAX]);
+int CreaMatrice(const char *Fichier, char matrice[SOLVER_MAX][SOLVER_MAX]);
 
-int ChercheMot (const char *mot, char matrice[MAX][MAX],
+int ChercheMot (const char *mot, char matrice[SOLVER_MAX][SOLVER_MAX],
                 int nbLignes , int nbColonnes,
                 int *ligneDebut , int *colDebut,
                 int *ligneFin, int *colFin);
 
 void ConvertirMajuscules(char *mot);
 
-void solver_test();
+void solver_test(void);
+void solver_run_words(const char *grid_file, const char *words_file);
 #endif 

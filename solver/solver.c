@@ -1,9 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include "solver.h"
 
-#define MAX 100 
-
-int CreaMatrice(const char *Fichier , char matrice[100][100])
+int CreaMatrice(const char *Fichier , char matrice[SOLVER_MAX][SOLVER_MAX])
 {
     FILE *f = fopen(Fichier, "r");
     if(f == NULL)
@@ -12,7 +11,7 @@ int CreaMatrice(const char *Fichier , char matrice[100][100])
         return 0;
     } 
     int ligne = 0;
-    char ligneM[MAX];
+    char ligneM[SOLVER_MAX];
 
     while (fgets(ligneM, sizeof(ligneM), f))//select line  in document f 
     {
@@ -31,7 +30,7 @@ int CreaMatrice(const char *Fichier , char matrice[100][100])
 
 }
 
-int ChercheMot(const char *mot, char matrice[MAX][MAX], int nbLignes, int nbColonnes,
+int ChercheMot(const char *mot, char matrice[SOLVER_MAX][SOLVER_MAX], int nbLignes, int nbColonnes,
                int *ligneDebut, int *colDebut, int *ligneFin, int *colFin)
 {
     int len = strlen(mot);
@@ -101,34 +100,42 @@ void ConvertirMajuscules(char *mot)//toUP
 }
 
 
-void solver_test(int argc, char *argv[]) // this part call all fonction of the solver and print the final result
+// Parcourt toutes les lignes de words_file et affiche les coordonnées pour chaque mot
+void solver_run_words(const char *grid_file, const char *words_file)
 {
-    if (argc != 3)
-    {
-        printf("il manque des argument");
-        
-    }   
-
-    char matrice[MAX][MAX];
-    int nbLignes = CreaMatrice(argv[1], matrice);
-    int nbColonnes = strlen(matrice[0]); 
-    ConvertirMajuscules(argv[2]);
-
-    int li1 = -1;
-    int li2 = -1;
-    int co1 = -1;
-    int co2 = -1;
-
-    if (ChercheMot(argv[2], matrice, nbLignes, nbColonnes, &li1, &co1, &li2, &co2))
-    {
-       
-        printf("(%d,%d)(%d,%d)\n", co1, li1,co2 ,li2);//print the position
-    
+    char matrice[SOLVER_MAX][SOLVER_MAX];
+    int nbLignes = CreaMatrice(grid_file, matrice);
+    if (nbLignes <= 0) {
+        printf("[solver] Grille vide ou introuvable (%s)\n", grid_file);
+        return;
     }
-    else
-    {
-        printf("Not found\n");
+    int nbColonnes = strlen(matrice[0]);
+
+    FILE *f = fopen(words_file, "r");
+    if (!f) {
+        printf("[solver] Impossible d'ouvrir %s\n", words_file);
+        return;
     }
 
-    
+    char ligne[SOLVER_MAX];
+    while (fgets(ligne, sizeof(ligne), f)) {
+        ligne[strcspn(ligne, "\n")] = '\0';
+        if (ligne[0] == '\0')
+            continue;
+        ConvertirMajuscules(ligne);
+
+        int li1 = -1, li2 = -1, co1 = -1, co2 = -1;
+        if (ChercheMot(ligne, matrice, nbLignes, nbColonnes, &li1, &co1, &li2, &co2)) {
+            printf("%s: (%d,%d)(%d,%d)\n", ligne, co1, li1, co2, li2);
+        } else {
+            printf("%s: Not found\n", ligne);
+        }
+    }
+    fclose(f);
+}
+
+// Compatibilité: version sans arguments, lance sur GRID / GRID_Word
+void solver_test(void)
+{
+    solver_run_words("GRID", "GRID_Word");
 }
