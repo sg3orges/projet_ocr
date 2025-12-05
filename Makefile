@@ -67,7 +67,7 @@ clean:
 	@echo "Cleaning object files and temporary folders..."
 	rm -f $(OBJ)
 	rm -f $(EXEC)
-	rm -rf cells letterInWord images
+	rm -rf cells letterInWord images grid_bbox.txt cells_coords.txt
 	rm -f GRID GRID_Word
 
 fclean: clean

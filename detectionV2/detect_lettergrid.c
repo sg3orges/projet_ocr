@@ -145,7 +145,8 @@ static int save_letter_with_margin(GdkPixbuf *img, GdkPixbuf *disp,
                                    guint8 R, guint8 G, guint8 B,
                                    int letter_idx,
                                    int margin,
-                                   int row_idx, int col_idx)
+                                   int row_idx, int col_idx,
+                                   FILE *coords_file)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
@@ -181,6 +182,9 @@ static int save_letter_with_margin(GdkPixbuf *img, GdkPixbuf *disp,
             char path[512];
             snprintf(path, sizeof(path), "cells/letter_%02d_%02d.png", row_idx, col_idx);
             gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
+            if (coords_file) {
+                fprintf(coords_file, "%02d %02d %d %d %d %d\n", row_idx, col_idx, x0, y0, x1, y1);
+            }
             g_object_unref(scaled);
             letter_idx++;
         }
@@ -239,6 +243,18 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
 
     int grid_w = gx1 - gx0 + 1;
     int grid_h = gy1 - gy0 + 1;
+
+    FILE *coords_file = fopen("cells_coords.txt", "w");
+    if (coords_file) {
+        fprintf(coords_file, "#row col x0 y0 x1 y1\n");
+    }
+
+    // Sauvegarde la bbox de la grille pour un post-traitement ultérieur
+    FILE *bbox = fopen("grid_bbox.txt", "w");
+    if (bbox) {
+        fprintf(bbox, "%d %d %d %d\n", gx0, gy0, gx1, gy1);
+        fclose(bbox);
+    }
 
     // --------------------------------------------------
     // 1) Copie de l'image pour travailler dessus
@@ -451,7 +467,8 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                                                      min_x, min_y, max_x, max_y,
                                                      R, G, B,
                                                      letter_idx, margin,
-                                                     row_idx, col_idx);
+                                                     row_idx, col_idx,
+                                                     coords_file);
             }
         }
     }
@@ -465,6 +482,7 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     g_free(is_hline);
     g_free(vlines);
     g_free(hlines);
+    if (coords_file) fclose(coords_file);
 
     g_object_unref(work);
 }

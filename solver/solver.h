@@ -18,4 +18,9 @@ void ConvertirMajuscules(char *mot);
 
 void solver_test(void);
 void solver_run_words(const char *grid_file, const char *words_file);
+void highlight_words_on_image(const char *image_path,
+                              const char *grid_file,
+                              const char *words_file,
+                              const char *bbox_file,
+                              const char *output_path);
 #endif 

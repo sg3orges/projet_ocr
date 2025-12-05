@@ -760,15 +760,29 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     GError *err = NULL;
     if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) {
         printf("[OK] Saved to: %s\n", output_path);
-        // Lance la détection sur l'image sauvegardée
-        char *detect_argv[] = {"detect", output_path, NULL};
-        detection_run_app(2, detect_argv);
+        // Lance la détection sur l'image sauvegardée dans un processus séparé
+        gchar *detect_argv[] = {"./ocr_project", "detect", output_path, NULL};
+        GError *spawn_err = NULL;
+        gint exit_status = 0;
+        if (!g_spawn_sync(NULL, detect_argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, NULL, &exit_status, &spawn_err)) {
+            printf("[Error] Lancement détection échoué: %s\n", spawn_err ? spawn_err->message : "inconnu");
+            if (spawn_err) g_error_free(spawn_err);
+        }
         // Après détection, génère le fichier GRID à partir des cells
         generate_grid_from_cells();
         // Génère GRID_Word à partir de letterInWord
         generate_words_from_letterInWord();
         // Lance le solver sur la grille et les mots détectés
         solver_run_words("GRID", "GRID_Word");
+        // Colorie les mots trouvés et affiche l'image annotée
+        const char *annotated_path = "images/annotated.png";
+        highlight_words_on_image(output_path, "GRID", "GRID_Word", "grid_bbox.txt", annotated_path);
+        GtkWidget *img_win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(GTK_WINDOW(img_win), "Resultat");
+        gtk_window_set_default_size(GTK_WINDOW(img_win), 900, 750);
+        GtkWidget *img = gtk_image_new_from_file(annotated_path);
+        gtk_container_add(GTK_CONTAINER(img_win), img);
+        gtk_widget_show_all(img_win);
     } else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 
