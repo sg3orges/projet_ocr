@@ -10,6 +10,7 @@
 #include <math.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <limits.h>
 #include <SDL2/SDL.h>
 #include "networks.h"
 #include "../detectionV2/detection.h"
@@ -48,6 +49,11 @@ static int cmp_filenames(const void *a, const void *b)
     return strcmp(fa, fb);
 }
 
+static int is_upper_letter(int ch)
+{
+    return (ch >= 'A' && ch <= 'Z');
+}
+
 static gboolean is_directory(const char *path)
 {
     struct stat st;
@@ -69,20 +75,22 @@ static void generate_grid_from_cells(void)
 
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strncmp(ent->d_name, "letter_", 7) == 0 && strstr(ent->d_name, ".png")) {
-            if (count >= cap) {
-                cap *= 2;
-                char **tmp = realloc(files, cap * sizeof(char *));
-                if (!tmp) { free(files); closedir(dir); return; }
-                files = tmp;
-            }
-            files[count++] = strdup(ent->d_name);
+        if (!strstr(ent->d_name, ".png"))
+            continue;
+        if (strncmp(ent->d_name, "letter_", 7) != 0 && !isdigit((unsigned char)ent->d_name[0]))
+            continue;
+        if (count >= cap) {
+            cap *= 2;
+            char **tmp = realloc(files, cap * sizeof(char *));
+            if (!tmp) { free(files); closedir(dir); return; }
+            files = tmp;
         }
+        files[count++] = strdup(ent->d_name);
     }
     closedir(dir);
 
     if (count == 0) {
-        printf("[Info] Aucun fichier letter_XXXX.png trouvé dans cells/.\n");
+        printf("[Info] Aucun fichier de cellule (.png) trouvé dans cells/.\n");
         free(files);
         return;
     }
@@ -92,6 +100,8 @@ static void generate_grid_from_cells(void)
     // Déduit la taille de la grille via les indices: 0000 => (row=0, col=0), 0001 => (0,1)
     int max_row = -1;
     int max_col = -1;
+    int min_row = INT_MAX;
+    int min_col = INT_MAX;
     int *rows = malloc(count * sizeof(int));
     int *cols = malloc(count * sizeof(int));
     if (!rows || !cols) {
@@ -103,14 +113,27 @@ static void generate_grid_from_cells(void)
 
     for (size_t i = 0; i < count; i++) {
         int r = -1, c = -1;
-        if (sscanf(files[i], "letter_%d_%d", &r, &c) == 2) {
-            rows[i] = r;
-            cols[i] = c;
-            if (rows[i] > max_row) max_row = rows[i];
-            if (cols[i] > max_col) max_col = cols[i];
-        } else {
-            rows[i] = cols[i] = -1;
+        if (sscanf(files[i], "letter_%d_%d", &c, &r) != 2) {
+            sscanf(files[i], "%d_%d", &c, &r);
         }
+        rows[i] = r;
+        cols[i] = c;
+        if (rows[i] > max_row) max_row = rows[i];
+        if (cols[i] > max_col) max_col = cols[i];
+        if (rows[i] >= 0 && rows[i] < min_row) min_row = rows[i];
+        if (cols[i] >= 0 && cols[i] < min_col) min_col = cols[i];
+    }
+
+    // Normalise en base 0 si des indices commencent à 1
+    if (min_row > 0 && min_row != INT_MAX) {
+        for (size_t i = 0; i < count; i++)
+            if (rows[i] >= 0) rows[i] -= min_row;
+        max_row -= min_row;
+    }
+    if (min_col > 0 && min_col != INT_MAX) {
+        for (size_t i = 0; i < count; i++)
+            if (cols[i] >= 0) cols[i] -= min_col;
+        max_col -= min_col;
     }
 
     int grid_rows = max_row + 1;
@@ -123,7 +146,7 @@ static void generate_grid_from_cells(void)
         return;
     }
 
-    // Initialise GRID avec des ?
+    // Initialise GRID avec des points pour éviter les espaces visibles
     char *grid_chars = malloc((size_t)grid_rows * (size_t)grid_cols);
     if (!grid_chars) {
         free(rows); free(cols);
@@ -131,7 +154,7 @@ static void generate_grid_from_cells(void)
         free(files);
         return;
     }
-    memset(grid_chars, '?', (size_t)grid_rows * (size_t)grid_cols);
+    memset(grid_chars, '.', (size_t)grid_rows * (size_t)grid_cols);
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         printf("[Error] SDL init failed: %s\n", SDL_GetError());
@@ -199,6 +222,46 @@ static void generate_grid_from_cells(void)
     for (size_t i = 0; i < count; i++) free(files[i]);
     free(files);
     printf("[OK] GRID généré à la racine (./GRID) en %dx%d.\n", grid_rows, grid_cols);
+
+    // Génère GRIDFINAL avec les lettres en bloc (retours à la ligne conservés)
+    FILE *gridf = fopen("GRID", "r");
+    FILE *gridfinal = fopen("GRIDFINAL", "w");
+    if (gridf && gridfinal) {
+        int ch;
+        int line_has_letter = 0;
+        int buffer[1024];
+        int idx = 0;
+        while ((ch = fgetc(gridf)) != EOF) {
+            if (ch == '\n') {
+                if (line_has_letter) {
+                    // Écrit la ligne filtrée
+                    for (int i = 0; i < idx; i++)
+                        fputc(buffer[i], gridfinal);
+                    fputc('\n', gridfinal);
+                }
+                line_has_letter = 0;
+                idx = 0;
+                continue;
+            }
+            if (is_upper_letter(ch)) {
+                buffer[idx++] = ch;
+                line_has_letter = 1;
+            }
+        }
+        // Fin de fichier sans '\n'
+        if (line_has_letter && idx > 0) {
+            for (int i = 0; i < idx; i++)
+                fputc(buffer[i], gridfinal);
+            fputc('\n', gridfinal);
+        }
+        fclose(gridf);
+        fclose(gridfinal);
+        printf("[OK] GRIDFINAL généré.\n");
+    } else {
+        if (gridf) fclose(gridf);
+        if (gridfinal) fclose(gridfinal);
+        printf("[Warn] Impossible de créer GRIDFINAL.\n");
+    }
 }
 
 // Parcourt letterInWord/word_xxx/letter_yyy.png et écrit GRID_Word (1 ligne par mot)
@@ -773,10 +836,10 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         // Génère GRID_Word à partir de letterInWord
         generate_words_from_letterInWord();
         // Lance le solver sur la grille et les mots détectés
-        solver_run_words("GRID", "GRID_Word");
+        solver_run_words("GRIDFINAL", "GRID_Word");
         // Colorie les mots trouvés et affiche l'image annotée
         const char *annotated_path = "images/annotated.png";
-        highlight_words_on_image(output_path, "GRID", "GRID_Word", "grid_bbox.txt", annotated_path);
+        highlight_words_on_image(output_path, "GRIDFINAL", "GRID_Word", "grid_bbox.txt", annotated_path);
         GtkWidget *img_win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         gtk_window_set_title(GTK_WINDOW(img_win), "Resultat");
         gtk_window_set_default_size(GTK_WINDOW(img_win), 900, 750);

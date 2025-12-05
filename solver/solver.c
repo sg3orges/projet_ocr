@@ -152,8 +152,8 @@ void highlight_words_on_image(const char *image_path,
         char line[256];
         while (fgets(line, sizeof(line), cfile)) {
             if (line[0] == '#') continue;
-            int r, c, x0, y0, x1, y1;
-            if (sscanf(line, "%d %d %d %d %d %d", &r, &c, &x0, &y0, &x1, &y1) == 6) {
+            int c, r, x0, y0, x1, y1;
+            if (sscanf(line, "%d %d %d %d %d %d", &c, &r, &x0, &y0, &x1, &y1) == 6) {
                 if (cells_count >= cells_cap) {
                     cells_cap = cells_cap ? cells_cap * 2 : 128;
                     cells = realloc(cells, cells_cap * sizeof(CellPos));
@@ -163,6 +163,21 @@ void highlight_words_on_image(const char *image_path,
             }
         }
         fclose(cfile);
+
+        // Normalisation base 0 si besoin (si les indices commencent à 1)
+        if (cells && cells_count > 0) {
+            int min_c = INT_MAX, min_r = INT_MAX;
+            for (size_t i = 0; i < cells_count; i++) {
+                if (cells[i].col < min_c) min_c = cells[i].col;
+                if (cells[i].row < min_r) min_r = cells[i].row;
+            }
+            if (min_c > 0 || min_r > 0) {
+                for (size_t i = 0; i < cells_count; i++) {
+                    cells[i].col -= min_c;
+                    cells[i].row -= min_r;
+                }
+            }
+        }
     }
 
     char matrice[SOLVER_MAX][SOLVER_MAX];
@@ -182,9 +197,7 @@ void highlight_words_on_image(const char *image_path,
         }
         fclose(bbox);
     } else {
-        printf("[highlight] bbox introuvable (%s), annotation annulée.\n", bbox_file);
-        free(cells);
-        return;
+        printf("[highlight] bbox introuvable (%s), tentative via cells_coords.\n", bbox_file);
     }
 
     GError *err = NULL;
@@ -199,7 +212,18 @@ void highlight_words_on_image(const char *image_path,
     int img_w = gdk_pixbuf_get_width(pix);
     int img_h = gdk_pixbuf_get_height(pix);
     if (gx1 <= gx0 || gy1 <= gy0 || gx1 >= img_w || gy1 >= img_h) {
-        gx0 = 0; gy0 = 0; gx1 = img_w - 1; gy1 = img_h - 1;
+        if (cells && cells_count > 0) {
+            gx0 = gy0 = INT_MAX;
+            gx1 = gy1 = 0;
+            for (size_t ci = 0; ci < cells_count; ci++) {
+                if (cells[ci].x0 < gx0) gx0 = cells[ci].x0;
+                if (cells[ci].y0 < gy0) gy0 = cells[ci].y0;
+                if (cells[ci].x1 > gx1) gx1 = cells[ci].x1;
+                if (cells[ci].y1 > gy1) gy1 = cells[ci].y1;
+            }
+        } else {
+            gx0 = 0; gy0 = 0; gx1 = img_w - 1; gy1 = img_h - 1;
+        }
     }
 
     double cell_w = (double)(gx1 - gx0 + 1) / nbColonnes;
@@ -301,5 +325,5 @@ void highlight_words_on_image(const char *image_path,
 // Compatibilité: version sans arguments, lance sur GRID / GRID_Word
 void solver_test(void)
 {
-    solver_run_words("GRID", "GRID_Word");
+    solver_run_words("GRIDFINAL", "GRID_Word");
 }

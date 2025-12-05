@@ -68,7 +68,7 @@ clean:
 	rm -f $(OBJ)
 	rm -f $(EXEC)
 	rm -rf cells letterInWord images grid_bbox.txt cells_coords.txt
-	rm -f GRID GRID_Word
+	rm -f GRID GRID_Word GRIDFINAL
 
 fclean: clean
 	@echo "Cleaning executable..."
