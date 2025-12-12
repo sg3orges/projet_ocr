@@ -11,7 +11,7 @@ void network_test(int argc, char *argv[]) {
 	
     if (!load_network(&net, save_file)) {
         printf(">>> Aucune sauvegarde trouvée. Entraînement nécessaire...\n");
-        train_network(&net, "dataset"); 
+        train_network(&net, "neuronne/dataset"); 
         save_network(&net, save_file);
     }
 
@@ -31,7 +31,7 @@ void network_test(int argc, char *argv[]) {
         printf("Astuce : Pour tester ta propre image, lance :\n");
         printf("./ocr_ai chemin/vers/ton_image.png\n\n");
         
-        const char *tests[] = {"dataset/A1.png", "dataset/B1.png", "dataset/C1.png"};
+        const char *tests[] = {"neuronne/dataset/A1.png", "neuronne/dataset/B1.png", "neuronne/dataset/C1.png"};
         double conf = 0.0;
         
         for (int i = 0; i < 3; i++) {

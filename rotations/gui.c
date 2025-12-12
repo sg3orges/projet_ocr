@@ -12,6 +12,11 @@
 static char selected_image_path[512] = {0};
 static GtkWidget *image_widget = NULL;
 static GtkWidget *scale_widget = NULL;
+static GtkWidget *main_window = NULL;
+
+// Limit display size to avoid oversized windows
+static const int DISPLAY_MAX_W = 1000;
+static const int DISPLAY_MAX_H = 800;
 
 // Buffers
 static GdkPixbuf *original_pixbuf = NULL;
@@ -19,6 +24,8 @@ static GdkPixbuf *current_display_pixbuf = NULL;
 
 static double current_angle = 0.0;
 static const char *startup_image_path = NULL;
+static char next_image_path[1024] = {0};
+static int launch_detection_after_quit = 0;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -82,12 +89,71 @@ static GdkPixbuf *rotate_pixbuf_any_angle(GdkPixbuf *src, double angle_deg)
     return gdk_pixbuf_new_from_data(dest_pixels, GDK_COLORSPACE_RGB, channels == 4, 8, dest_w, dest_h, dest_rowstride, free_pixbuf_data, NULL);
 }
 
+// Create an RGB copy (drops alpha if present).
+static GdkPixbuf *strip_alpha_channel(GdkPixbuf *src)
+{
+    if (!src) return NULL;
+    if (!gdk_pixbuf_get_has_alpha(src)) {
+        return gdk_pixbuf_copy(src);
+    }
+
+    int w = gdk_pixbuf_get_width(src);
+    int h = gdk_pixbuf_get_height(src);
+    int src_channels = gdk_pixbuf_get_n_channels(src);
+    int src_rs = gdk_pixbuf_get_rowstride(src);
+    guchar *src_px = gdk_pixbuf_get_pixels(src);
+
+    GdkPixbuf *dst = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, w, h);
+    if (!dst) return NULL;
+
+    int dst_rs = gdk_pixbuf_get_rowstride(dst);
+    guchar *dst_px = gdk_pixbuf_get_pixels(dst);
+
+    for (int y = 0; y < h; y++) {
+        guchar *srow = src_px + y * src_rs;
+        guchar *drow = dst_px + y * dst_rs;
+        for (int x = 0; x < w; x++) {
+            guchar *s = srow + x * src_channels;
+            guchar *d = drow + x * 3;
+            d[0] = s[0];
+            d[1] = s[1];
+            d[2] = s[2];
+        }
+    }
+    return dst;
+}
+
+static void set_image_widget_from_pixbuf(GdkPixbuf *pix)
+{
+    if (!pix || !image_widget) return;
+    int w = gdk_pixbuf_get_width(pix);
+    int h = gdk_pixbuf_get_height(pix);
+    double scale = 1.0;
+    if (w > DISPLAY_MAX_W || h > DISPLAY_MAX_H) {
+        double sx = (double)DISPLAY_MAX_W / (double)w;
+        double sy = (double)DISPLAY_MAX_H / (double)h;
+        scale = (sx < sy) ? sx : sy;
+    }
+
+    if (scale < 1.0) {
+        int nw = (int)(w * scale);
+        int nh = (int)(h * scale);
+        GdkPixbuf *scaled = gdk_pixbuf_scale_simple(pix, nw, nh, GDK_INTERP_BILINEAR);
+        if (scaled) {
+            gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), scaled);
+            g_object_unref(scaled);
+            return;
+        }
+    }
+    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), pix);
+}
+
 static void update_image_rotation(double angle)
 {
     if (!original_pixbuf) return;
     if (current_display_pixbuf) g_object_unref(current_display_pixbuf);
     current_display_pixbuf = rotate_pixbuf_any_angle(original_pixbuf, angle);
-    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
+    set_image_widget_from_pixbuf(current_display_pixbuf);
 }
 
 static void on_rotation_changed(GtkRange *range, gpointer user_data)
@@ -182,7 +248,7 @@ static void load_image_from_file(const char *f)
     original_pixbuf = gdk_pixbuf_new_from_file(f, NULL);
     if (original_pixbuf) {
         current_display_pixbuf = gdk_pixbuf_copy(original_pixbuf);
-        gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
+        set_image_widget_from_pixbuf(current_display_pixbuf);
         g_snprintf(selected_image_path, sizeof(selected_image_path), "%s", f);
 
         gtk_range_set_value(GTK_RANGE(scale_widget), 0.0);
@@ -434,7 +500,7 @@ static void on_clean_clicked(GtkWidget *widget, gpointer user_data)
     // 3. Ajout du cadre Intelligent (Scan Bas -> Haut)
     add_smart_frame_v2(current_display_pixbuf);
 
-    gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
+    set_image_widget_from_pixbuf(current_display_pixbuf);
 }
 
 static void on_save_clicked(GtkWidget *widget, gpointer user_data)
@@ -449,6 +515,11 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     GdkPixbuf *to_save = gdk_pixbuf_copy(current_display_pixbuf);
     apply_black_and_white(to_save);
 
+    // GTK scale can warn when saving RGBA into RGB targets; strip alpha for outputs
+    GdkPixbuf *rgb = strip_alpha_channel(to_save);
+    g_object_unref(to_save);
+    to_save = rgb;
+
     char output_path[1024];
     const char *basename_str = (selected_image_path[0] != '\0') ? g_path_get_basename(selected_image_path) : "image.png";
     
@@ -462,7 +533,26 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
 
     GError *err = NULL;
     if (gdk_pixbuf_save(to_save, output_path, "png", &err, NULL)) 
+    {
         printf("[OK] Saved to: %s\n", output_path);
+        g_snprintf(next_image_path, sizeof(next_image_path), "%s", output_path);
+        launch_detection_after_quit = 1;
+
+        // Launch detection in a new process, then close current window
+        char *quoted = g_shell_quote(output_path);
+        char *cmd = g_strdup_printf("./ocr_project detect %s", quoted);
+        GError *spawn_err = NULL;
+        if (!g_spawn_command_line_async(cmd, &spawn_err)) {
+            printf("[Error] Could not start detection: %s\n", spawn_err->message);
+            g_clear_error(&spawn_err);
+        }
+        g_free(quoted);
+        g_free(cmd);
+
+        if (main_window)
+            gtk_widget_destroy(main_window);
+        gtk_main_quit();
+    }
     else { 
         printf("[Error] Save failed: %s\n", err->message); 
         g_error_free(err); 
@@ -495,13 +585,13 @@ void run_gui(int argc, char *argv[])
 {
     gtk_init(&argc, &argv);
     if (argc > 1) startup_image_path = argv[1];
-    GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(win), "OCR Cleaner (Final)");
-    gtk_window_set_default_size(GTK_WINDOW(win), 900, 750);
-    g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    main_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(main_window), "OCR Cleaner (Final)");
+    gtk_window_set_default_size(GTK_WINDOW(main_window), 900, 750);
+    g_signal_connect(main_window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    gtk_container_add(GTK_CONTAINER(win), box);
+    gtk_container_add(GTK_CONTAINER(main_window), box);
 
     // Zone Image
     image_widget = gtk_image_new();
@@ -520,7 +610,7 @@ void run_gui(int argc, char *argv[])
     gtk_box_pack_start(GTK_BOX(box), hbox, FALSE, FALSE, 10);
 
     GtkWidget *btn_load = gtk_button_new_with_label("Load Image");
-    g_signal_connect(btn_load, "clicked", G_CALLBACK(on_load_button_clicked), win);
+    g_signal_connect(btn_load, "clicked", G_CALLBACK(on_load_button_clicked), main_window);
     gtk_box_pack_start(GTK_BOX(hbox), btn_load, FALSE, FALSE, 5);
 
     GtkWidget *btn_auto = gtk_button_new_with_label("Auto Rotate");
@@ -531,7 +621,7 @@ void run_gui(int argc, char *argv[])
     g_signal_connect(btn_clean, "clicked", G_CALLBACK(on_clean_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_clean, FALSE, FALSE, 5);
 
-    GtkWidget *btn_save = gtk_button_new_with_label("Save");
+    GtkWidget *btn_save = gtk_button_new_with_label("Suivant");
     g_signal_connect(btn_save, "clicked", G_CALLBACK(on_save_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_save, FALSE, FALSE, 5);
 
@@ -539,7 +629,10 @@ void run_gui(int argc, char *argv[])
     g_signal_connect(btn_quit, "clicked", G_CALLBACK(gtk_main_quit), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_quit, FALSE, FALSE, 5);
 
-    gtk_widget_show_all(win);
+    gtk_widget_show_all(main_window);
     if (startup_image_path) load_image_from_file(startup_image_path);
     gtk_main();
+
+    (void)launch_detection_after_quit;
+    (void)next_image_path;
 }
