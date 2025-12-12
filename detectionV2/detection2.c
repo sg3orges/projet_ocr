@@ -5,8 +5,6 @@
 #include <math.h>
 #include "detection.h"
 
-
-/* === Prototypes des fonctions externes (Doivent exister dans les autres fichiers) === */
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
                             guint8 black_thr, guint8 R,guint8 G,guint8 B);
@@ -14,12 +12,9 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
                             int wx0,int wx1,int wy0,int wy1,
                             guint8 black_thr, guint8 R,guint8 G,guint8 B);
 
-
-/* === Fonctions Utilitaires Locales (Static) === */
-
 static inline int clampi(int v,int lo,int hi)
 {
-    return v<lo?lo:(v>hi?hi:v); 
+    return v<lo?lo:(v>hi?hi:v);
 }
 
 static inline guint8 get_gray_local(GdkPixbuf *pix,int x,int y)
@@ -51,8 +46,6 @@ static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     }
 }
 
-// --- Fonctions d'analyse de profil pour find_zones ---
-
 static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
                                      int x0, int x1)
 {
@@ -78,7 +71,6 @@ static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
     return r;
 }
 
-// Calcule la force de l'autocorrélation normalisée (périodicité)
 static double autocorr_strength(const double *p, int n,
                                  int lag_min, int lag_max)
 {
@@ -112,7 +104,6 @@ static double autocorr_strength(const double *p, int n,
     return best;
 }
 
-// Score de périodicité horizontal (utile pour identifier la grille)
 static double periodicity_score(const double *p, int n)
 {
     if (n < 8) return 0.0;
@@ -121,7 +112,6 @@ static double periodicity_score(const double *p, int n)
     if (lag_max <= lag_min) return 0.0;
     return autocorr_strength(p, n, lag_min, lag_max);
 }
-
 
 typedef struct
 {
@@ -137,16 +127,14 @@ static void find_zones(GdkPixbuf *pix,
     int W = gdk_pixbuf_get_width(pix);
     int H = gdk_pixbuf_get_height(pix);
 
-    // Initialisation des variables locales
     int gx0_local = 0, gx1_local = 0;
     int wx0_local = 0, wx1_local = 0;
     int grid_w = 0;
     int word_idx = -1;
     int grid_idx = -1;
-    
+
     if (W <= 0 || H <= 0) { goto fallback_zones; }
 
-    // 1) Calcul de la densité de noir par colonne (dens)
     double *dens = calloc(W, sizeof(double));
     if (!dens) { goto fallback_zones; }
     for (int x = 0; x < W; x++)
@@ -157,11 +145,10 @@ static void find_zones(GdkPixbuf *pix,
         dens[x] = (double)black / (double)H;
     }
 
-    // 2) Lissage agressif (sm)
     double *sm = calloc(W, sizeof(double));
     if (!sm) { free(dens); goto fallback_zones; }
 
-    int rad = W / 80; // Rayon de lissage
+    int rad = W / 80;
     if (rad < 5)   rad = 5;
     if (rad > 20) rad = 20;
 
@@ -175,16 +162,13 @@ static void find_zones(GdkPixbuf *pix,
         sm[x] = (cnt > 0) ? acc / (double)cnt : 0.0;
     }
 
-    // 3) Découpe en segments : Seuil de coupure basé sur la MOYENNE
-    // Pour les images très denses, max_s est moins fiable que la moyenne.
     double mean_s = 0.0;
     for (int x = 0; x < W; x++) mean_s += sm[x];
     mean_s /= W;
-    
+
     if (mean_s < 1e-4) { free(dens); free(sm); goto fallback_zones; }
 
-    // Seuil de coupure Tseg ULTRA-AGRESSIF pour détecter la séparation
-    double Tseg = 0.15 * mean_s; // Basé sur la MOYENNE et augmenté
+    double Tseg = 0.15 * mean_s;
     if (Tseg < 0.005) Tseg = 0.005;
 
     int min_width = W / 40;
@@ -199,12 +183,12 @@ static void find_zones(GdkPixbuf *pix,
 
     for (int x = 0; x < W; x++)
     {
-        if (sm[x] >= Tseg) // Au-dessus du seuil -> partie du segment
+        if (sm[x] >= Tseg)
         {
             if (!inside) { inside = 1; start = x; sum = sm[x]; cnt = 1; }
             else { sum += sm[x]; cnt++; }
         }
-        else if (inside) // Creux trouvé -> fin du segment
+        else if (inside)
         {
             int end = x - 1;
             int width = end - start + 1;
@@ -221,16 +205,12 @@ static void find_zones(GdkPixbuf *pix,
 
     if (nseg == 0) { free(dens); free(sm); free(seg); goto fallback_zones; }
 
-
-    // 4) SÉLECTION DE LA GRILLE: C'est le bloc le plus dominant (Densité * Largeur)
-    
-    double best_score_size = 0.0; // Score: Densité * Largeur
+    double best_score_size = 0.0;
 
     for (int i = 0; i < nseg; i++)
     {
-        // La grille est toujours le bloc le plus gros/dense
-        double current_score_size = seg[i].avg * (double)(seg[i].end - seg[i].start + 1); 
-        
+        double current_score_size = seg[i].avg * (double)(seg[i].end - seg[i].start + 1);
+
         if (current_score_size > best_score_size)
         {
             best_score_size = current_score_size;
@@ -238,19 +218,15 @@ static void find_zones(GdkPixbuf *pix,
         }
     }
 
-    // --- Attribution de la Grille (toujours un segment trouvé) ---
     if (grid_idx >= 0)
     {
         gx0_local = seg[grid_idx].start;
         gx1_local = seg[grid_idx].end;
         grid_w = gx1_local - gx0_local + 1;
     }
-    else { goto fallback_zones; } // Ne devrait pas arriver si nseg > 0
+    else { goto fallback_zones; }
 
-
-    // 5) SÉLECTION DE LA ZONE MOTS: Le segment restant le plus grand
     double best_word_score = 0.0;
-    // (grid_idx et gx0_local/gx1_local sont définis ici si la grille a été trouvée)
 
     for (int i = 0; i < nseg; i++)
     {
@@ -259,11 +235,10 @@ static void find_zones(GdkPixbuf *pix,
         int s0 = seg[i].start;
         int s1 = seg[i].end;
 
-        // Le segment de mots doit être entièrement à gauche ou à droite de la grille
         if (!(s1 < gx0_local || s0 > gx1_local))
             continue;
 
-        double score = seg[i].avg * (double)(s1 - s0 + 1); 
+        double score = seg[i].avg * (double)(s1 - s0 + 1);
 
         if (score > best_word_score)
         {
@@ -272,49 +247,38 @@ static void find_zones(GdkPixbuf *pix,
         }
     }
 
-    // --- Attribution de la Zone Mots ---
     if (word_idx >= 0)
     {
         wx0_local = seg[word_idx].start;
         wx1_local = seg[word_idx].end;
-        
-        // CORRECTION CRITIQUE: Si la grille est immédiatement à côté des mots, 
-        // nous ajustons la borne droite de la grille pour qu'elle s'arrête juste avant les mots.
-        // Ceci gère le cas où Tseg est trop bas et ne crée pas de creux.
-        if (wx0_local > gx1_local) 
+
+        if (wx0_local > gx1_local)
         {
              gx1_local = wx0_local - 1;
         }
     }
-    else // Fallback pour les mots
+    else
     {
-        // ... (Fallback inchangé)
     }
 
     free(dens); free(sm); free(seg);
 
-    // --- Sorties finales ---
-    *gx0 = gx0_local; 
-    *gx1 = gx1_local; 
-    *gy0 = 0; 
+    *gx0 = gx0_local;
+    *gx1 = gx1_local;
+    *gy0 = 0;
     *gy1 = H - 1;
 
-    *wx0 = clampi(wx0_local, 0, W-1); 
-    *wx1 = clampi(wx1_local, 0, W-1); 
-    *wy0 = 0; 
+    *wx0 = clampi(wx0_local, 0, W-1);
+    *wx1 = clampi(wx1_local, 0, W-1);
+    *wy0 = 0;
     *wy1 = H - 1;
     return;
 
-
-// --- Cas de fallback si la détection échoue ---
 fallback_zones:
     *gx0 = W/3; *gx1 = W-1; *gy0 = 0; *gy1 = H-1;
     *wx0 = 0;   *wx1 = W/3; *wy0 = 0; *wy1 = H-1;
     return;
 }
-
-
-
 
 static void run_detection(GtkWidget *win,const char *path)
 {
@@ -322,9 +286,9 @@ static void run_detection(GtkWidget *win,const char *path)
     GdkPixbuf *img=gdk_pixbuf_new_from_file(path,&err);
     if(!img)
     {
-	    g_printerr("Erreur: %s\n",err->message);
-	    g_clear_error(&err);
-	    return;
+        g_printerr("Erreur: %s\n",err->message);
+        g_clear_error(&err);
+        return;
     }
 
     GdkPixbuf *disp=gdk_pixbuf_copy(img);
@@ -334,8 +298,8 @@ static void run_detection(GtkWidget *win,const char *path)
     printf("ZONE GRILLE: x=[%d,%d], y=[%d,%d]\n",gx0,gx1,gy0,gy1);
     printf("ZONE MOTS  : x=[%d,%d], y=[%d,%d]\n",wx0,wx1,wy0,wy1);
 
-    draw_rect(disp,gx0,gy0,gx1,gy1,255,0,0); // red: grid
-    draw_rect(disp,wx0,wy0,wx1,wy1,0,255,0); // green : word
+    draw_rect(disp,gx0,gy0,gx1,gy1,255,0,0);
+    draw_rect(disp,wx0,wy0,wx1,wy1,0,255,0);
 
     const guint8 BLACK_T=160;
     detect_letters_in_grid(img,disp,gx0,gx1,gy0,gy1,BLACK_T,0,128,255);
@@ -349,7 +313,6 @@ static void run_detection(GtkWidget *win,const char *path)
     g_object_unref(disp);
 }
 
-//GTK
 static void on_open(GApplication *app,GFile **files,int n,const char *hint)
 {
     (void)n; (void)hint;
