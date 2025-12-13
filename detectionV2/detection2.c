@@ -50,6 +50,7 @@ static void on_overlay_close(GtkWidget *widget, gpointer user_data)
     (void)widget; (void)user_data;
     // We keep generated files (GRIDL/GRIDWO/CELLPOS/cells/letterinword/images)
     // for debugging/inspection; no automatic cleanup here.
+    g_print("[Info] Fermeture demandee par l'utilisateur. Arret du processus.\n");
     exit(0);
 }
 

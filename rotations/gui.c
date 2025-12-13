@@ -538,17 +538,6 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         g_snprintf(next_image_path, sizeof(next_image_path), "%s", output_path);
         launch_detection_after_quit = 1;
 
-        // Launch detection in a new process, then close current window
-        char *quoted = g_shell_quote(output_path);
-        char *cmd = g_strdup_printf("./ocr_project detect %s", quoted);
-        GError *spawn_err = NULL;
-        if (!g_spawn_command_line_async(cmd, &spawn_err)) {
-            printf("[Error] Could not start detection: %s\n", spawn_err->message);
-            g_clear_error(&spawn_err);
-        }
-        g_free(quoted);
-        g_free(cmd);
-
         if (main_window)
             gtk_widget_destroy(main_window);
         gtk_main_quit();
@@ -634,5 +623,24 @@ void run_gui(int argc, char *argv[])
     gtk_main();
 
     (void)launch_detection_after_quit;
-    (void)next_image_path;
+    
+    // Force la mise a jour visuelle (fermeture de la fenetre) AVANT de bloquer
+    while (gtk_events_pending()) gtk_main_iteration();
+
+    // EXECUTION SYNCHRONE pour eviter le retour au shell
+    if (launch_detection_after_quit && next_image_path[0] != '\0') {
+        char *quoted = g_shell_quote(next_image_path);
+        // On utilise system() pour bloquer le processus parent tant que le fils tourne
+        char *cmd = g_strdup_printf("./ocr_project detect %s", quoted);
+        printf("[Info] Lancement synchrone : %s\n", cmd);
+        
+        // system() retourne le code de sortie
+        int ret = system(cmd);
+        printf("[Info] Detection terminee (code %d).\n", ret);
+
+        g_free(quoted);
+        g_free(cmd);
+    } else {
+        printf("[Info] Rotation GUI closed without triggering detection.\n");
+    }
 }
