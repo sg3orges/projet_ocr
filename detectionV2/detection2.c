@@ -7,6 +7,8 @@
 #include <string.h>
 #include "detection.h"
 #include "networks.h"
+
+// Gestion des conflits de macro MAX avec solver.h / glib
 #ifdef MAX
 #undef MAX
 #endif
@@ -18,7 +20,8 @@ static int g_grid_bbox_set = 0;
 static GtkWidget *g_detect_window = NULL;
 
 // Clean up generated artifacts
-static void cleanup_generated_files(void)
+// Marked unused to silence compiler warning if not called directly
+static void __attribute__((unused)) cleanup_generated_files(void)
 {
     const char *paths[] = { "GRIDL", "GRIDWO", "CELLPOS", "cells", "letterinword", "images", NULL };
     for (int i = 0; paths[i]; i++) {
@@ -29,7 +32,7 @@ static void cleanup_generated_files(void)
 }
 
 // Re-open the detection window if it was hidden
-static void reopen_detect_window(void)
+static void __attribute__((unused)) reopen_detect_window(void)
 {
     if (g_detect_window && GTK_IS_WIDGET(g_detect_window)) {
         gtk_widget_show_all(g_detect_window);
@@ -59,6 +62,8 @@ typedef struct
     int col, row;
     int x0, y0, x1, y1;
 } CellBBox;
+
+// Prototypes externes (définis dans detect_lettergrid.c et detect_letterinword.c)
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
                             guint8 black_thr, guint8 R,guint8 G,guint8 B);
@@ -100,8 +105,8 @@ static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     }
 }
 
-static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
-                                     int x0, int x1)
+__attribute__((unused))static double * col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
+                                    int x0, int x1)
 {
     int W = gdk_pixbuf_get_width(pix);
     int H = gdk_pixbuf_get_height(pix);
@@ -125,7 +130,7 @@ static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
     return r;
 }
 
-static double autocorr_strength(const double *p, int n,
+static double __attribute__((unused)) autocorr_strength(const double *p, int n,
                                  int lag_min, int lag_max)
 {
     if (n <= 0) return 0.0;
@@ -158,7 +163,7 @@ static double autocorr_strength(const double *p, int n,
     return best;
 }
 
-static double periodicity_score(const double *p, int n)
+static double __attribute__((unused)) periodicity_score(const double *p, int n)
 {
     if (n < 8) return 0.0;
     int lag_min = 3;
@@ -508,7 +513,7 @@ static int solve_words_in_grid(const char *root_dir,
     char *grid_path = g_build_filename(root_dir, "GRIDL", NULL);
     char *words_path = g_build_filename(root_dir, "GRIDWO", NULL);
 
-    char matrice[MAX][MAX];
+    char matrice[MAX_MAT][MAX_MAT]; // Updated to MAX_MAT
     int nbLignes = CreaMatrice(grid_path, matrice);
     if (nbLignes <= 0) {
         g_printerr("[Error] Lecture GRIDL echouee (%s)\n", grid_path);

@@ -146,7 +146,7 @@ static int copy_file(const char *src, const char *dst)
     return 0;
 }
 
-static void finalize_cells(const char *tmp_dir, const char *out_dir,
+static void __attribute__((unused)) finalize_cells(const char *tmp_dir, const char *out_dir,
                            int max_cols, int max_rows)
 {
     int best_idx[65][65];
@@ -994,7 +994,9 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             guint8 R, guint8 G, guint8 B)
 {
     (void)black_thr;
-
+    (void)R; 
+    (void)G; 
+    (void)B;
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
 
