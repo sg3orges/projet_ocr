@@ -167,7 +167,7 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
     if (width < 3 || height < 3)
         return letter_idx;
 
-    if (width <= (int)(1.35 * height))
+    if (width <= (int)(1.30 * height))
         return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
                                             R, G, B, word_dir, letter_idx, 3);
 
@@ -180,10 +180,12 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
                                             R, G, B, word_dir, letter_idx, 3);
 
     double max_col = 0.0;
-    for (int x = 0; x < wsub; x++) {
+    for (int x = 0; x < wsub; x++)
+    {
         int gx = rx0 + x;
         int black = 0, tot = 0;
-        for (int y = ry0; y <= ry1; y++) {
+        for (int y = ry0; y <= ry1; y++)
+        {
             if (get_gray(img, gx, y) < (int)ink_thr) black++;
             tot++;
         }
@@ -195,32 +197,54 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
         col[x] = (col[x-1] + col[x] + col[x+1]) / 3.0;
 
     int best_split = -1;
-    int best_run_len = 0;
+    double best_score = 1e18;
 
-    double low_thr = 0.18 * max_col;
-    if (low_thr < 0.01) low_thr = 0.01;
+    int a = wsub / 6;
+    int b = (5 * wsub) / 6;
+    if (b <= a + 4) { a = 2; b = wsub - 3; }
 
-    for (int x = 1; x < wsub - 1; )
+    int min_side_w = 2;
+    int min_side_h = 6;
+
+    int try_step = 1;
+    if (wsub > 80) try_step = 2;
+
+    for (int s = a; s <= b; s += try_step)
     {
-        if (col[x] <= low_thr)
-        {
-            int s = x;
-            while (x < wsub - 1 && col[x] <= low_thr) x++;
-            int e = x - 1;
-            int len = e - s + 1;
+        int mid_x = rx0 + s;
 
-            if (s > wsub/8 && e < (7*wsub)/8 && len > best_run_len)
-            {
-                best_run_len = len;
-                best_split = (s + e) / 2;
-            }
+        int lx0, ly0, lx1, ly1;
+        int rx0b, ry0b, rx1b, ry1b;
+
+        if (!ink_bbox(img, rx0, ry0, mid_x, ry1, ink_thr, &lx0, &ly0, &lx1, &ly1))
+            continue;
+        if (!ink_bbox(img, mid_x + 1, ry0, rx1, ry1, ink_thr, &rx0b, &ry0b, &rx1b, &ry1b))
+            continue;
+
+        int lw = lx1 - lx0 + 1, lh = ly1 - ly0 + 1;
+        int rw = rx1b - rx0b + 1, rh = ry1b - ry0b + 1;
+
+        if (lw < min_side_w || rw < min_side_w) continue;
+        if (lh < min_side_h || rh < min_side_h) continue;
+
+        if (lw < (int)(0.12 * height) || rw < (int)(0.12 * height))
+            continue;
+
+        double valley = col[s];
+        double balance = fabs((double)lw - (double)rw) / (double)(lw + rw + 1);
+
+        double score = valley + 0.35 * balance;
+
+        if (score < best_score)
+        {
+            best_score = score;
+            best_split = s;
         }
-        else x++;
     }
 
     free(col);
 
-    if (best_split == -1 || best_run_len < 2 || max_col <= 0.0)
+    if (best_split == -1)
         return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
                                             R, G, B, word_dir, letter_idx, 3);
 
@@ -237,17 +261,6 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
         return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
                                             R, G, B, word_dir, letter_idx, 3);
 
-    int lw = lx1 - lx0 + 1, lh = ly1 - ly0 + 1;
-    int rw = rx1b - rx0b + 1, rh = ry1b - ry0b + 1;
-
-    if (lw < 3 || lh < 6 || rw < 3 || rh < 6)
-        return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
-                                            R, G, B, word_dir, letter_idx, 3);
-
-    if (lw < (int)(0.20*height) || rw < (int)(0.20*height))
-        return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
-                                            R, G, B, word_dir, letter_idx, 3);
-
     letter_idx = maybe_split_and_save_letter_word(img, disp,
                                                   lx0, ly0, lx1, ly1,
                                                   black_thr, R, G, B,
@@ -260,6 +273,9 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
 
     return letter_idx;
 }
+
+
+
 
 static double* row_ratio_band(GdkPixbuf *img, guint8 thr, int x0, int x1){
     int W=gdk_pixbuf_get_width(img), H=gdk_pixbuf_get_height(img);
