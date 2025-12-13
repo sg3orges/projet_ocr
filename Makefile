@@ -67,7 +67,7 @@ clean:
 	@echo "Cleaning object files and temporary folders..."
 	rm -f $(OBJ)
 	rm -f $(EXEC)
-	rm -rf cells letterinword images GRIDL GRIDWO
+	rm -rf cells letterinword images GRIDL GRIDWO CELLPOS
 
 fclean: clean
 	@echo "Cleaning executable..."

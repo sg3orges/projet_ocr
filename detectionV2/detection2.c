@@ -15,6 +15,43 @@
 static char *g_last_image_path = NULL;
 static int g_grid_x0 = 0, g_grid_y0 = 0, g_grid_x1 = 0, g_grid_y1 = 0;
 static int g_grid_bbox_set = 0;
+static GtkWidget *g_detect_window = NULL;
+
+// Clean up generated artifacts
+static void cleanup_generated_files(void)
+{
+    const char *paths[] = { "GRIDL", "GRIDWO", "CELLPOS", "cells", "letterinword", "images", NULL };
+    for (int i = 0; paths[i]; i++) {
+        char *cmd = g_strdup_printf("rm -rf %s", paths[i]);
+        g_spawn_command_line_async(cmd, NULL);
+        g_free(cmd);
+    }
+}
+
+// Re-open the detection window if it was hidden
+static void reopen_detect_window(void)
+{
+    if (g_detect_window && GTK_IS_WIDGET(g_detect_window)) {
+        gtk_widget_show_all(g_detect_window);
+        if (GTK_IS_WINDOW(g_detect_window))
+            gtk_window_present(GTK_WINDOW(g_detect_window));
+    }
+}
+
+static void on_detect_destroy(GtkWidget *widget, gpointer user_data)
+{
+    (void)user_data;
+    if (g_detect_window == widget) g_detect_window = NULL;
+}
+
+// Close overlay, clean files, and quit app
+static void on_overlay_close(GtkWidget *widget, gpointer user_data)
+{
+    (void)widget; (void)user_data;
+    // We keep generated files (GRIDL/GRIDWO/CELLPOS/cells/letterinword/images)
+    // for debugging/inspection; no automatic cleanup here.
+    exit(0);
+}
 
 typedef struct
 {
@@ -217,6 +254,29 @@ typedef struct
     int found;
 } SolveResult;
 
+typedef struct { guint8 r, g, b; } WordColor;
+
+static const WordColor WORD_COLORS[] = {
+    {255, 0, 0},     // red
+    {0, 140, 255},   // blue
+    {0, 180, 80},    // green
+    {255, 140, 0},   // orange
+    {170, 0, 255},   // purple
+    {0, 200, 200},   // cyan
+    {255, 0, 150},   // magenta
+    {120, 70, 0},    // brown
+    {255, 200, 0},   // yellow-ish
+    {0, 100, 0},     // dark green
+    {0, 0, 0},       // black fallback
+};
+static const int WORD_COLORS_LEN = (int)(sizeof(WORD_COLORS) / sizeof(WORD_COLORS[0]));
+
+static inline WordColor word_color_for_index(int idx)
+{
+    if (idx < 0 || WORD_COLORS_LEN == 0) return (WordColor){255, 0, 0};
+    return WORD_COLORS[idx % WORD_COLORS_LEN];
+}
+
 static int cmp_str_ptr(const void *a, const void *b)
 {
     const char *sa = *(const char * const *)a;
@@ -314,6 +374,9 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     }
     GdkPixbuf *disp = gdk_pixbuf_copy(img);
 
+    char *root_dir = find_project_root();
+    GPtrArray *cell_positions = load_cell_positions(root_dir);
+
     int x0=0, y0=0, x1=0, y1=0;
     if (g_grid_bbox_set) {
         x0 = g_grid_x0; y0 = g_grid_y0; x1 = g_grid_x1; y1 = g_grid_y1;
@@ -324,8 +387,9 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     int H = y1 - y0 + 1;
     double stepX = (nb_cols > 0) ? (double)W / (double)nb_cols : 48.0;
     double stepY = (nb_rows > 0) ? (double)H / (double)nb_rows : 48.0;
-    double padX = stepX * 0.14;
-    double padY = stepY * 0.14;
+    // Draw a smaller box centered in each cell to avoid touching grid lines
+    double insetX = stepX * 0.20;
+    double insetY = stepY * 0.20;
 
     for (guint i = 0; i < results->len; i++) {
         SolveResult *sr = g_ptr_array_index((GPtrArray *)results, i);
@@ -338,26 +402,54 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
             len = abs(sr->c2 - sr->c1) + abs(sr->r2 - sr->r1) + 1;
         }
 
+        WordColor col = word_color_for_index((int)i);
+
         for (int k = 0; k < len; k++) {
             int c = sr->c1 + dc * k;
             int r = sr->r1 + dr * k;
-            int rx0 = x0 + (int)llround(c * stepX + padX);
-            int ry0 = y0 + (int)llround(r * stepY + padY);
-            int rx1 = x0 + (int)llround((c + 1) * stepX - padX) - 1;
-            int ry1 = y0 + (int)llround((r + 1) * stepY - padY) - 1;
-            draw_rect(disp, rx0, ry0, rx1, ry1, 255, 0, 0);
+            int rx0, ry0, rx1, ry1;
+
+            CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c, r) : NULL;
+            if (cb) {
+                int w = cb->x1 - cb->x0 + 1;
+                int h = cb->y1 - cb->y0 + 1;
+                int inset_px_x = (int)llround(w * 0.08);
+                int inset_px_y = (int)llround(h * 0.08);
+                rx0 = clampi(cb->x0 + inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
+                ry0 = clampi(cb->y0 + inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
+                rx1 = clampi(cb->x1 - inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
+                ry1 = clampi(cb->y1 - inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
+            } else {
+                rx0 = x0 + (int)llround(c * stepX + insetX);
+                ry0 = y0 + (int)llround(r * stepY + insetY);
+                rx1 = x0 + (int)llround((c + 1) * stepX - insetX) - 1;
+                ry1 = y0 + (int)llround((r + 1) * stepY - insetY) - 1;
+            }
+
+            draw_rect(disp, rx0, ry0, rx1, ry1, col.r, col.g, col.b);
         }
     }
 
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "Solutions (overlay)");
     gtk_window_set_default_size(GTK_WINDOW(win), gdk_pixbuf_get_width(disp), gdk_pixbuf_get_height(disp));
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_container_add(GTK_CONTAINER(win), box);
+
     GtkWidget *imgw = gtk_image_new_from_pixbuf(disp);
-    gtk_container_add(GTK_CONTAINER(win), imgw);
+    gtk_box_pack_start(GTK_BOX(box), imgw, TRUE, TRUE, 0);
+
+    GtkWidget *btn_close = gtk_button_new_with_label("Fermer");
+    gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 4);
+    g_signal_connect(btn_close, "clicked", G_CALLBACK(on_overlay_close), NULL);
+
     gtk_widget_show_all(win);
 
     g_object_unref(img);
     g_object_unref(disp);
+
+    if (cell_positions) g_ptr_array_free(cell_positions, TRUE);
+    g_free(root_dir);
 }
 
 static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
@@ -639,6 +731,7 @@ static void find_zones(GdkPixbuf *pix,
     int H = gdk_pixbuf_get_height(pix);
 
     int gx0_local = 0, gx1_local = 0;
+    int gy0_local = 0, gy1_local = H - 1;
     int wx0_local = 0, wx1_local = 0;
     int word_idx = -1;
     int grid_idx = -1;
@@ -732,6 +825,29 @@ static void find_zones(GdkPixbuf *pix,
     {
         gx0_local = seg[grid_idx].start;
         gx1_local = seg[grid_idx].end;
+
+        // Detect the vertical span of the grid by scanning only inside the grid X band
+        double *row_dens = calloc(H, sizeof(double));
+        if (row_dens)
+        {
+            for (int y = 0; y < H; y++)
+            {
+                int black = 0;
+                for (int x = gx0_local; x <= gx1_local; x++)
+                    if (get_gray_local(pix, x, y) < thr) black++;
+                row_dens[y] = (double)black / (double)(gx1_local - gx0_local + 1);
+            }
+
+            double maxr = 0.0;
+            for (int y = 0; y < H; y++) if (row_dens[y] > maxr) maxr = row_dens[y];
+
+            double Ty = maxr * 0.35;
+            int top = 0, bot = H - 1;
+            while (top < H && row_dens[top] < Ty) top++;
+            while (bot >= 0 && row_dens[bot] < Ty) bot--;
+            if (top < bot) { gy0_local = top; gy1_local = bot; }
+            free(row_dens);
+        }
     }
     else { goto fallback_zones; }
 
@@ -774,13 +890,13 @@ static void find_zones(GdkPixbuf *pix,
 
     *gx0 = gx0_local;
     *gx1 = gx1_local;
-    *gy0 = 0;
-    *gy1 = H - 1;
+    *gy0 = gy0_local;
+    *gy1 = gy1_local;
 
     *wx0 = clampi(wx0_local, 0, W-1);
     *wx1 = clampi(wx1_local, 0, W-1);
-    *wy0 = 0;
-    *wy1 = H - 1;
+    *wy0 = gy0_local;
+    *wy1 = gy1_local;
     return;
 
 fallback_zones:
@@ -791,13 +907,19 @@ fallback_zones:
 
 static void on_solve_clicked(GtkWidget *widget, gpointer user_data)
 {
-    (void)widget; (void)user_data;
+    GtkWidget *win = GTK_WIDGET(user_data);
+    (void)widget;
     g_print("[Info] Bouton Resoudre clique : generation de GRIDL via reseau de neurones...\n");
     run_solver_pipeline();
+    if (win) {
+        gtk_widget_hide(win); // garde l'app en vie
+    }
 }
 
 static void run_detection(GtkWidget *win,const char *path)
 {
+    g_detect_window = win;
+    g_signal_connect(win, "destroy", G_CALLBACK(on_detect_destroy), NULL);
     if (g_last_image_path) {
         g_free(g_last_image_path);
         g_last_image_path = NULL;
@@ -837,7 +959,7 @@ static void run_detection(GtkWidget *win,const char *path)
     gtk_box_pack_start(GTK_BOX(box), imgw, TRUE, TRUE, 0);
 
     GtkWidget *btn_solve = gtk_button_new_with_label("Resoudre");
-    g_signal_connect(btn_solve, "clicked", G_CALLBACK(on_solve_clicked), NULL);
+    g_signal_connect(btn_solve, "clicked", G_CALLBACK(on_solve_clicked), win);
     gtk_box_pack_start(GTK_BOX(box), btn_solve, FALSE, FALSE, 4);
 
     gtk_widget_show_all(win);
@@ -852,7 +974,6 @@ static void on_open(GApplication *app,GFile **files,int n,const char *hint)
     GtkWidget *win=gtk_application_window_new(GTK_APPLICATION(app));
     gtk_window_set_title(GTK_WINDOW(win),"Détection grille et mots (GTK3)");
     gtk_window_set_default_size(GTK_WINDOW(win),1100,800);
-    g_signal_connect(win, "destroy", G_CALLBACK(g_application_quit), app);
     char *path=g_file_get_path(files[0]);
     run_detection(win,path);
     g_free(path);
