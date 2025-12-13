@@ -368,7 +368,7 @@ static void remove_small_components_binary(GdkPixbuf *pix, int min_area)
 
 static void clean_letter_pixbuf(GdkPixbuf *pix)
 {
-    binarize_pixbuf(pix, 175);
+    binarize_pixbuf(pix, 180);
     despeckle_by_neighbors(pix, 2);
     remove_small_components_binary(pix, 6);
     despeckle_by_neighbors(pix, 2);
