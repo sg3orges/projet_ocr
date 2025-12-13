@@ -32,6 +32,72 @@ typedef struct
 
 typedef struct { int x, y; } Point;
 
+
+
+static void binarize_pixbuf(GdkPixbuf *pix, guint8 thr)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix);
+
+    for (int y = 0; y < H; ++y)
+    {
+        guchar *row = p + y * rs;
+        for (int x = 0; x < W; ++x)
+        {
+            guchar *px = row + x * n;
+            guint8 g = (guint8)((px[0] + px[1] + px[2]) / 3);
+            guint8 v = (g < thr) ? 0 : 255;
+            px[0] = px[1] = px[2] = v;
+        }
+    }
+}
+
+static void despeckle_binary_black_islands(GdkPixbuf *pix, int min_black_neighbors)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    guchar *src = gdk_pixbuf_get_pixels(pix);
+
+    gsize sz = (gsize)rs * (gsize)H;
+    guchar *tmp = (guchar*)g_malloc(sz);
+    if (!tmp) return;
+    memcpy(tmp, src, (size_t)sz);
+
+    for (int y = 1; y < H - 1; ++y)
+    {
+        for (int x = 1; x < W - 1; ++x)
+        {
+            guchar *p = tmp + y * rs + x * n;
+            if (p[0] != 0) continue;
+
+            int nb = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    guchar *q = tmp + (y + dy) * rs + (x + dx) * n;
+                    if (q[0] == 0) nb++;
+                }
+            }
+
+            if (nb < min_black_neighbors)
+            {
+                guchar *d = src + y * rs + x * n;
+                d[0] = d[1] = d[2] = 255;
+            }
+        }
+    }
+
+    g_free(tmp);
+}
+
+
 static int parse_cell_filename(const char *name, int *col, int *row, int *idx)
 {
     int c, r, i;
@@ -337,6 +403,10 @@ static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
 
     GdkPixbuf *scaled = gdk_pixbuf_scale_simple(
         sub, LETTER_TARGET_W, LETTER_TARGET_H, GDK_INTERP_BILINEAR);
+    
+    binarize_pixbuf(scaled, 180);
+despeckle_binary_black_islands(scaled, 2);
+
 
     if (scaled)
     {
