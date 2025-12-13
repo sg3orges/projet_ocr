@@ -1,6 +1,6 @@
 // gui.c
 // GTK interface
-// Workflow: Load -> Auto Rotate -> Clean (Auto 35k + Smart Frame) -> Save (Force B/W)
+// Workflow: Load -> Auto Rotate -> Clean (Remove > 35k AND Remove <= 3px + Smart Frame) -> Save
 
 #include <gtk/gtk.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
@@ -223,8 +223,106 @@ static void apply_black_and_white(GdkPixbuf *pixbuf)
 }
 
 // --------------------------------------------------
-// Suppression BRUTE des paquets
-// Seuil FIXÉ À 35000
+// Suppression des PETITS POINTS (<= max_area pixels)
+// --------------------------------------------------
+static void remove_small_dots(GdkPixbuf *pixbuf, int max_area)
+{
+    int w = gdk_pixbuf_get_width(pixbuf);
+    int h = gdk_pixbuf_get_height(pixbuf);
+    int channels = gdk_pixbuf_get_n_channels(pixbuf);
+    int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
+    guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
+
+    unsigned char *visited = g_malloc0(w * h);
+    int *stack = NULL;
+    int stack_cap = 0;
+
+    int *blob_indices = NULL;
+    int blob_indices_cap = 0;
+
+    printf("\n--- REMOVING SMALL DOTS (<= %d px) ---\n", max_area);
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int idx = y * w + x;
+            if (visited[idx]) continue;
+            
+            guchar *p = pixels + y * rowstride + x * channels;
+            if (p[0] != 0) { visited[idx] = 1; continue; }
+
+            int sp = 0;
+            if (stack_cap == 0) {
+                stack_cap = 65536;
+                stack = (int *)g_malloc(sizeof(int) * stack_cap);
+                
+                blob_indices_cap = 100; 
+                blob_indices = (int *)g_malloc(sizeof(int) * blob_indices_cap);
+            }
+
+            stack[sp++] = idx;
+            visited[idx] = 1;
+            
+            int area = 0;
+            int too_big = 0;
+
+            while (sp > 0) {
+                int cur = stack[--sp];
+                
+                if (!too_big) {
+                    if (area < blob_indices_cap) {
+                        blob_indices[area] = cur;
+                    } else {
+                        too_big = 1;
+                    }
+                }
+                area++;
+
+                int cy = cur / w;
+                int cx = cur % w;
+
+                const int nx[4] = {-1, 1, 0, 0}; 
+                const int ny[4] = {0, 0, -1, 1};
+                for (int k = 0; k < 4; k++) {
+                    int nx_x = cx + nx[k]; 
+                    int ny_y = cy + ny[k];
+                    
+                    if (nx_x < 0 || nx_x >= w || ny_y < 0 || ny_y >= h) continue;
+                    
+                    int nidx = ny_y * w + nx_x;
+                    if (visited[nidx]) continue;
+                    
+                    guchar *pn = pixels + ny_y * rowstride + nx_x * channels;
+                    if (pn[0] == 0) {
+                        if (sp >= stack_cap) {
+                            stack_cap *= 2;
+                            stack = (int *)g_realloc(stack, sizeof(int) * stack_cap);
+                        }
+                        stack[sp++] = nidx;
+                        visited[nidx] = 1;
+                    }
+                }
+            }
+
+            if (area <= max_area) {
+                for (int i = 0; i < area; i++) {
+                    int index = blob_indices[i];
+                    int by = index / w;
+                    int bx = index % w;
+                    guchar *pt = pixels + by * rowstride + bx * channels;
+                    pt[0] = pt[1] = pt[2] = 255;
+                    if (channels == 4) pt[3] = 255;
+                }
+            }
+        }
+    }
+
+    if (stack) g_free(stack);
+    if (blob_indices) g_free(blob_indices);
+    g_free(visited);
+}
+
+// --------------------------------------------------
+// Suppression BRUTE des paquets (> 35000)
 // --------------------------------------------------
 static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
 {
@@ -238,12 +336,10 @@ static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
     int *stack = NULL;
     int stack_cap = 0;
 
-    int min_area = 35000; // FIXE
-
-    // 15% de l'image (pour protéger la grille si jamais elle est géante)
+    int min_area = 35000; 
     int safe_size = (w * h) * 0.15; 
 
-    printf("\n--- CLEANING (Seuil FIXE: %d) ---\n", min_area);
+    printf("\n--- CLEANING LARGE (Seuil: %d) ---\n", min_area);
 
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -263,7 +359,6 @@ static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
             int area = 0;
             int min_x = x, max_x = x, min_y = y, max_y = y;
 
-            // SCAN
             while (sp > 0) {
                 int cur = stack[--sp];
                 area++;
@@ -292,10 +387,9 @@ static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
                 }
             }
 
-            // SUPPRESSION (Si > 35000 et pas gigantesque comme la grille)
             if (area >= min_area) {
                 if (area > safe_size) {
-                    printf("  [PROTECTED] Main Grid/Frame detected (Area: %d)\n", area);
+                    printf("  [PROTECTED] Main Grid/Frame (Area: %d)\n", area);
                 } else {
                     printf("  [DELETED]   Large Blob (Area: %d)\n", area);
                     
@@ -340,7 +434,6 @@ static void add_smart_frame_v2(GdkPixbuf *pixbuf)
     int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
     guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
 
-    // 1. Projection Horizontale
     int *proj_y = calloc(h, sizeof(int));
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
@@ -349,7 +442,6 @@ static void add_smart_frame_v2(GdkPixbuf *pixbuf)
         }
     }
 
-    // 2. Scan du BAS vers le HAUT
     int grid_bottom = -1;
     int grid_top = -1;
     int gap_counter = 0;
@@ -374,7 +466,6 @@ static void add_smart_frame_v2(GdkPixbuf *pixbuf)
     
     if (grid_top == -1) grid_top = 0; 
     
-    // 3. Scan Horizontal
     int min_x = w, max_x = 0;
     for (int y = grid_top; y <= grid_bottom; y++) {
         for (int x = 0; x < w; x++) {
@@ -428,10 +519,13 @@ static void on_clean_clicked(GtkWidget *widget, gpointer user_data)
     // 1. Noir et Blanc
     apply_black_and_white(current_display_pixbuf);
     
-    // 2. Suppression Brute (Seuil fixé à 35000)
+    // 2. Suppression des gros paquets (35000)
     remove_large_blobs_fixed(current_display_pixbuf);
 
-    // 3. Ajout du cadre Intelligent (Scan Bas -> Haut)
+    // 3. Suppression des PETITS POINTS (<= 3px) - MODIFICATION ICI
+    remove_small_dots(current_display_pixbuf, 3);
+
+    // 4. Ajout du cadre Intelligent
     add_smart_frame_v2(current_display_pixbuf);
 
     gtk_image_set_from_pixbuf(GTK_IMAGE(image_widget), current_display_pixbuf);
@@ -445,9 +539,10 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         return;
     }
 
-    // On s'assure que ce qui est sauvegardé est en Noir & Blanc
+    // On s'assure que ce qui est sauvegardé est en Noir & Blanc et nettoyé des petits points
     GdkPixbuf *to_save = gdk_pixbuf_copy(current_display_pixbuf);
     apply_black_and_white(to_save);
+    remove_small_dots(to_save, 3); // MODIFICATION ICI
 
     char output_path[1024];
     const char *basename_str = (selected_image_path[0] != '\0') ? g_path_get_basename(selected_image_path) : "image.png";
@@ -457,7 +552,6 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     else 
         g_snprintf(output_path, sizeof(output_path), "images/output_processed.png");
 
-    // Crée le dossier de sortie au besoin
     g_mkdir_with_parents("images", 0755);
 
     GError *err = NULL;
