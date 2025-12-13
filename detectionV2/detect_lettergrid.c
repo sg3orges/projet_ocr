@@ -15,6 +15,12 @@
 #define MAX_GRID_COLS 64
 #define MAX_GRID_ROWS 64
 
+#if defined(__GNUC__)
+#define UNUSED __attribute__((unused))
+#else
+#define UNUSED
+#endif
+
 typedef struct
 {
     int min_x, max_x;
@@ -23,13 +29,6 @@ typedef struct
     int width, height, area;
     gboolean looks_like_I;
 } LetterCand;
-
-typedef struct
-{
-    gboolean used;
-    int min_x, max_x;
-    int min_y, max_y;
-} CellAgg;
 
 typedef struct { int x, y; } Point;
 
@@ -57,11 +56,7 @@ static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
         }
 
     DIR *d = opendir(dirpath);
-    if (!d)
-    {
-        perror("opendir cleanup");
-        return;
-    }
+    if (!d) return;
 
     struct dirent *de;
     while ((de = readdir(d)) != NULL)
@@ -84,11 +79,7 @@ static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
     closedir(d);
 
     d = opendir(dirpath);
-    if (!d)
-    {
-        perror("opendir cleanup pass2");
-        return;
-    }
+    if (!d) return;
 
     while ((de = readdir(d)) != NULL)
     {
@@ -139,13 +130,15 @@ static int copy_file(const char *src, const char *dst)
     char buf[8192];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), fs)) > 0)
-        fwrite(buf, 1, n, fd);
+        (void)fwrite(buf, 1, n, fd);
 
     fclose(fs);
     fclose(fd);
     return 0;
 }
 
+static void finalize_cells(const char *tmp_dir, const char *out_dir,
+                           int max_cols, int max_rows) UNUSED;
 static void finalize_cells(const char *tmp_dir, const char *out_dir,
                            int max_cols, int max_rows)
 {
@@ -193,7 +186,7 @@ static void finalize_cells(const char *tmp_dir, const char *out_dir,
             snprintf(src, sizeof(src), "%s/%s", tmp_dir, best_name[col][row]);
             snprintf(dst, sizeof(dst), "%s/%s", out_dir, best_name[col][row]);
 
-            copy_file(src, dst);
+            (void)copy_file(src, dst);
         }
     }
 }
@@ -215,7 +208,7 @@ static inline guint8 get_gray(GdkPixbuf *pix, int x, int y)
     int rs = gdk_pixbuf_get_rowstride(pix);
     guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
 
-    return (p[0] + p[1] + p[2]) / 3;
+    return (guint8)((p[0] + p[1] + p[2]) / 3);
 }
 
 static void put_rgb(GdkPixbuf *pix, int x, int y,
@@ -277,7 +270,7 @@ static void flood_fill_component(GdkPixbuf *img, guint8 thr, int sx, int sy,
                                  gboolean **visited,
                                  int W, int H)
 {
-    Point *stack = g_malloc(W * H * sizeof(Point));
+    Point *stack = g_malloc((gsize)W * (gsize)H * sizeof(Point));
     int top = 0;
 
     stack[top++] = (Point){ sx, sy };
@@ -352,7 +345,7 @@ static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
                  "cells/%03d_%03d_%04d.png",
                  col_idx, row_idx, letter_idx);
 
-        gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
+        (void)gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
         g_object_unref(scaled);
         letter_idx++;
     }
@@ -362,12 +355,12 @@ static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
 }
 
 static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
-                                   int min_x, int min_y,
-                                   int max_x, int max_y,
-                                   guint8 R, guint8 G, guint8 B,
-                                   int col_idx, int row_idx,
-                                   int letter_idx,
-                                   int margin)
+                                  int min_x, int min_y,
+                                  int max_x, int max_y,
+                                  guint8 R, guint8 G, guint8 B,
+                                  int col_idx, int row_idx,
+                                  int letter_idx,
+                                  int margin)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
@@ -388,11 +381,8 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
     if (!sub)
         return letter_idx;
 
-    GdkPixbuf *out = gdk_pixbuf_new(GDK_COLORSPACE_RGB,
-                                    FALSE,
-                                    8,
-                                    LETTER_TARGET_W,
-                                    LETTER_TARGET_H);
+    GdkPixbuf *out = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8,
+                                    LETTER_TARGET_W, LETTER_TARGET_H);
     if (!out)
     {
         g_object_unref(sub);
@@ -416,13 +406,9 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
     double sx = (double)LETTER_TARGET_W  / (double)src_w;
     double sy = (double)LETTER_TARGET_H / (double)src_h;
 
-    gdk_pixbuf_scale(sub, out,
-                     0, 0,
-                     LETTER_TARGET_W,
-                     LETTER_TARGET_H,
-                     0.0, 0.0,
-                     sx, sy,
-                     GDK_INTERP_BILINEAR);
+    gdk_pixbuf_scale(sub, out, 0, 0,
+                     LETTER_TARGET_W, LETTER_TARGET_H,
+                     0.0, 0.0, sx, sy, GDK_INTERP_BILINEAR);
 
     int rs  = gdk_pixbuf_get_rowstride(out);
     int nch = gdk_pixbuf_get_n_channels(out);
@@ -435,11 +421,12 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
         for (int x = 0; x < LETTER_TARGET_W; ++x)
         {
             guchar *p = row + x * nch;
-            guint8 g = (p[0] + p[1] + p[2]) / 3;
+            guint8 g = (guint8)((p[0] + p[1] + p[2]) / 3);
             guint8 v = (g < THR) ? 0 : 255;
             p[0] = p[1] = p[2] = v;
         }
     }
+
     int black = 0;
     for (int y = 0; y < LETTER_TARGET_H; ++y)
     {
@@ -452,7 +439,6 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
     }
 
     double ratio = (double)black / (double)(LETTER_TARGET_W * LETTER_TARGET_H);
-
     if (ratio < 0.01 || ratio > 0.60)
     {
         g_object_unref(out);
@@ -462,9 +448,9 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
 
     char path[512];
     snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png",
-         col_idx, row_idx, letter_idx);
+             col_idx, row_idx, letter_idx);
 
-    gdk_pixbuf_save(out, path, "png", NULL, NULL);
+    (void)gdk_pixbuf_save(out, path, "png", NULL, NULL);
 
     g_object_unref(out);
     g_object_unref(sub);
@@ -490,10 +476,10 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
     int grid_w = gx1 - gx0 + 1;
     int grid_h = gy1 - gy0 + 1;
 
-    int *col_sum  = g_malloc0(grid_w * sizeof(int));
-    int *row_sum  = g_malloc0(grid_h * sizeof(int));
-    gboolean *is_vline = g_malloc0(W * sizeof(gboolean));
-    gboolean *is_hline = g_malloc0(H * sizeof(gboolean));
+    int *col_sum  = g_malloc0((gsize)grid_w * sizeof(int));
+    int *row_sum  = g_malloc0((gsize)grid_h * sizeof(int));
+    gboolean *is_vline = g_malloc0((gsize)W * sizeof(gboolean));
+    gboolean *is_hline = g_malloc0((gsize)H * sizeof(gboolean));
 
     int max_col_sum = 0;
     for (int x = gx0; x <= gx1; ++x)
@@ -548,8 +534,8 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
     int max_lines_x = gx1 - gx0 + 4;
     int max_lines_y = gy1 - gy0 + 4;
 
-    int *vx = g_malloc0(max_lines_x * sizeof(int));
-    int *vy = g_malloc0(max_lines_y * sizeof(int));
+    int *vx = g_malloc0((gsize)max_lines_x * sizeof(int));
+    int *vy = g_malloc0((gsize)max_lines_y * sizeof(int));
     int nv = 0, nh = 0;
 
     int in_run = 0, run_start = 0;
@@ -659,11 +645,11 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
             int row_idx = r + 1;
 
             letter_idx = save_letter_simple(img, disp,
-                                min_x, min_y, max_x, max_y,
-                                R, G, B,
-                                col_idx, row_idx,
-                                letter_idx,
-                                3);
+                                            min_x, min_y, max_x, max_y,
+                                            R, G, B,
+                                            col_idx, row_idx,
+                                            letter_idx,
+                                            3);
         }
     }
 
@@ -760,10 +746,10 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     if (!work)
         return;
 
-    int      *col_sum  = g_malloc0(grid_w * sizeof(int));
-    int      *row_sum  = g_malloc0(grid_h * sizeof(int));
-    gboolean *is_vline = g_malloc0(W * sizeof(gboolean));
-    gboolean *is_hline = g_malloc0(H * sizeof(gboolean));
+    int      *col_sum  = g_malloc0((gsize)grid_w * sizeof(int));
+    int      *row_sum  = g_malloc0((gsize)grid_h * sizeof(int));
+    gboolean *is_vline = g_malloc0((gsize)W * sizeof(gboolean));
+    gboolean *is_hline = g_malloc0((gsize)H * sizeof(gboolean));
 
     for (int x = gx0; x <= gx1; ++x)
     {
@@ -791,7 +777,7 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     for (int x = gx0; x <= gx1; ++x)
     {
         int idx_x = x - gx0;
-        if (col_sum[idx_x] >= (int)(COL_DENSITY_THR * grid_h))
+        if (col_sum[idx_x] >= (int)(COL_DENSITY_THR * (double)grid_h))
         {
             is_vline[x] = TRUE;
             for (int y = gy0; y <= gy1; ++y)
@@ -802,7 +788,7 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     for (int y = gy0; y <= gy1; ++y)
     {
         int idx_y = y - gy0;
-        if (row_sum[idx_y] >= (int)(ROW_DENSITY_THR * grid_w))
+        if (row_sum[idx_y] >= (int)(ROW_DENSITY_THR * (double)grid_w))
         {
             is_hline[y] = TRUE;
             for (int x = gx0; x <= gx1; ++x)
@@ -817,11 +803,11 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     int nv = extract_line_centers(is_vline, gx0, gx1, vx, 512);
     int nh = extract_line_centers(is_hline, gy0, gy1, vy, 512);
 
-    gboolean **visited = g_malloc(H * sizeof(gboolean *));
+    gboolean **visited = g_malloc((gsize)H * sizeof(gboolean *));
     for (int y = 0; y < H; ++y)
     {
-        visited[y] = g_malloc(W * sizeof(gboolean));
-        memset(visited[y], 0, W * sizeof(gboolean));
+        visited[y] = g_malloc((gsize)W * sizeof(gboolean));
+        memset(visited[y], 0, (size_t)W * sizeof(gboolean));
     }
 
     GArray *cands = g_array_new(FALSE, FALSE, sizeof(LetterCand));
@@ -853,11 +839,8 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
             gboolean looks_like_I = (height >= MIN_HEIGHT_I && width <= MAX_WIDTH_I);
 
             if (area < MIN_STRONG_AREA && !looks_like_I) continue;
-
             if (!looks_like_I && (width < MIN_WIDTH || height < MIN_HEIGHT)) continue;
-
             if (width > W / MAX_DIM_FACTOR || height > H / MAX_DIM_FACTOR) continue;
-
             if (width <= 4 && height <= 4 && !looks_like_I) continue;
 
             double aspect = (double)width / (double)height;
@@ -907,7 +890,7 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
         g_array_sort(cands, cmp_cy);
 
         int n = (int)cands->len;
-        int *heights = g_malloc0(n * sizeof(int));
+        int *heights = g_malloc0((gsize)n * sizeof(int));
         for (int i = 0; i < n; ++i)
             heights[i] = g_array_index(cands, LetterCand, i).height;
 
@@ -939,11 +922,11 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
             }
 
             int len = end - start;
-            LetterCand *linebuf = g_malloc(len * sizeof(LetterCand));
+            LetterCand *linebuf = g_malloc((gsize)len * sizeof(LetterCand));
             for (int i = 0; i < len; ++i)
                 linebuf[i] = g_array_index(cands, LetterCand, start + i);
 
-            qsort(linebuf, len, sizeof(LetterCand), cmp_cx);
+            qsort(linebuf, (size_t)len, sizeof(LetterCand), cmp_cx);
 
             for (int i = 0; i < len; ++i)
             {
@@ -1009,9 +992,7 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     if (gx1 - gx0 < 5 || gy1 - gy0 < 5)
         return;
 
-    ensure_dir("cells");
-
-    int used_legacy = 0;
+    (void)ensure_dir("cells");
 
     int nb_cells   = 0;
     int nb_letters = detect_letters_by_cells(img, disp,
@@ -1022,14 +1003,9 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     if (nb_letters > 0 && nb_cells > 0)
     {
         double ratio = (double)nb_letters / (double)nb_cells;
-
         if (ratio > 0.5 && ratio < 1.5)
-        {
             return;
-        }
     }
-
-    used_legacy = 1;
 
     gdk_pixbuf_copy_area(img, 0, 0, W, H, disp, 0, 0);
 
@@ -1037,8 +1013,5 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                           gx0, gx1, gy0, gy1,
                           R, G, B);
 
-    if (used_legacy)
-    {
-        cleanup_cells_dir("cells", 14, 14);
-    }
+    cleanup_cells_dir("cells", 14, 14);
 }
