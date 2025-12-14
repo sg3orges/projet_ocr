@@ -180,8 +180,22 @@ __attribute__((unused)) static void refine_box_position(GdkPixbuf *pix, int *p1x
         double dy = center_y - th_cy;
         
 
-        if(dx > 20) dx = 20; if(dx < -20) dx = -20;
-        if(dy > 20) dy = 20; if(dy < -20) dy = -20;
+        if(dx > 20)
+        {
+            dx = 20;
+        }
+        if(dx < -20)
+        {
+            dx = -20;
+        }
+        if(dy > 20)
+        {
+            dy = 20;
+        }
+        if(dy < -20)
+        {
+            dy = -20;
+        }
 
         *p1x += (int)dx; *p1y += (int)dy;
         *p2x += (int)dx; *p2y += (int)dy;
