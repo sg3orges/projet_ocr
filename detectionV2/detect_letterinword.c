@@ -14,10 +14,12 @@
 
 static inline int clampi(int v,int lo,int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 
-static inline int get_gray(GdkPixbuf *img, int x, int y){
+static inline int get_gray(GdkPixbuf *img, int x, int y)
+{
     int W=gdk_pixbuf_get_width(img);
     int H=gdk_pixbuf_get_height(img);
-    x=clampi(x,0,W-1); y=clampi(y,0,H-1);
+    x=clampi(x,0,W-1);
+    y=clampi(y,0,H-1);
 
     int nchan=gdk_pixbuf_get_n_channels(img);
     int rs=gdk_pixbuf_get_rowstride(img);
@@ -28,13 +30,15 @@ static inline int get_gray(GdkPixbuf *img, int x, int y){
     return clampi(gray,0,255);
 }
 
-static inline guint8 ink_thr_from(guint8 black_thr){
+static inline guint8 ink_thr_from(guint8 black_thr)
+{
     int t = (int)black_thr + 35;
     if (t > 240) t = 240;
     return (guint8)t;
 }
 
-static void put_rgb(GdkPixbuf *pix, int x,int y, guint8 R,guint8 G,guint8 B){
+static void put_rgb(GdkPixbuf *pix, int x,int y, guint8 R,guint8 G,guint8 B)
+{
     int W=gdk_pixbuf_get_width(pix), H=gdk_pixbuf_get_height(pix);
     if(x<0||y<0||x>=W||y>=H) return;
     int nchan=gdk_pixbuf_get_n_channels(pix);
@@ -44,25 +48,30 @@ static void put_rgb(GdkPixbuf *pix, int x,int y, guint8 R,guint8 G,guint8 B){
 }
 
 static void draw_rect_thick(GdkPixbuf *pix, int x0,int y0,int x1,int y1,
-                            guint8 R,guint8 G,guint8 B,int thick){
+                            guint8 R,guint8 G,guint8 B,int thick)
+{
     int W=gdk_pixbuf_get_width(pix), H=gdk_pixbuf_get_height(pix);
     x0=clampi(x0,0,W-1); x1=clampi(x1,0,W-1);
     y0=clampi(y0,0,H-1); y1=clampi(y1,0,H-1);
     if(x0>x1){ int t=x0;x0=x1;x1=t; }
     if(y0>y1){ int t=y0;y0=y1;y1=t; }
-    for(int t=0;t<thick;t++){
-        for(int x=x0; x<=x1; x++){
+    for(int t=0;t<thick;t++)
+    {
+        for(int x=x0; x<=x1; x++)
+        {
             put_rgb(pix,x,y0+t,R,G,B);
             put_rgb(pix,x,y1-t,R,G,B);
         }
-        for(int y=y0; y<=y1; y++){
+        for(int y=y0; y<=y1; y++)
+        {
             put_rgb(pix,x0+t,y,R,G,B);
             put_rgb(pix,x1-t,y,R,G,B);
         }
     }
 }
 
-static int ensure_dir_local(const char *path){
+static int ensure_dir_local(const char *path)
+{
     if(access(path, F_OK)==0) return 0;
     if(mkdir(path,0755)==0) return 0;
     if(errno==EEXIST) return 0;
@@ -71,7 +80,8 @@ static int ensure_dir_local(const char *path){
 }
 
 static int ink_bbox(GdkPixbuf *img, int x0,int y0,int x1,int y1,
-                    guint8 thr, int *rx0,int *ry0,int *rx1,int *ry1){
+                    guint8 thr, int *rx0,int *ry0,int *rx1,int *ry1)
+{
     int W=gdk_pixbuf_get_width(img), H=gdk_pixbuf_get_height(img);
     x0=clampi(x0,0,W-1); x1=clampi(x1,0,W-1);
     y0=clampi(y0,0,H-1); y1=clampi(y1,0,H-1);
@@ -80,15 +90,22 @@ static int ink_bbox(GdkPixbuf *img, int x0,int y0,int x1,int y1,
 
     int found=0;
     int minx=W-1, maxx=0, miny=H-1, maxy=0;
-    for(int y=y0;y<=y1;y++){
-        for(int x=x0;x<=x1;x++){
-            if(get_gray(img,x,y) < (int)thr){
-                if(x<minx)minx=x; if(x>maxx)maxx=x;
-                if(y<miny)miny=y; if(y>maxy)maxy=y;
+
+    for(int y=y0;y<=y1;y++)
+    {
+        for(int x=x0;x<=x1;x++)
+        {
+            if(get_gray(img,x,y) < (int)thr)
+            {
+                if(x<minx) minx=x;
+                if(x>maxx) maxx=x;
+                if(y<miny) miny=y;
+                if(y>maxy) maxy=y;
                 found=1;
             }
         }
     }
+
     if(!found) return 0;
     *rx0=minx; *ry0=miny; *rx1=maxx; *ry1=maxy;
     return 1;
@@ -174,12 +191,11 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
     const guint8 ink_thr = ink_thr_from(black_thr);
 
     int wsub = width;
-    double *col = (double*)malloc(sizeof(double) * wsub);
+    double *col = (double*)malloc(sizeof(double) * (size_t)wsub);
     if (!col)
         return save_letter_with_margin_word(img, disp, rx0, ry0, rx1, ry1,
                                             R, G, B, word_dir, letter_idx, 3);
 
-    double max_col = 0.0;
     for (int x = 0; x < wsub; x++)
     {
         int gx = rx0 + x;
@@ -190,7 +206,6 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
             tot++;
         }
         col[x] = (tot > 0) ? (double)black / (double)tot : 0.0;
-        if (col[x] > max_col) max_col = col[x];
     }
 
     for (int x = 1; x < wsub - 1; ++x)
@@ -232,7 +247,6 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
 
         double valley = col[s];
         double balance = fabs((double)lw - (double)rw) / (double)(lw + rw + 1);
-
         double score = valley + 0.35 * balance;
 
         if (score < best_score)
@@ -274,20 +288,20 @@ static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
     return letter_idx;
 }
 
-
-
-
-static double* row_ratio_band(GdkPixbuf *img, guint8 thr, int x0, int x1){
+static double* row_ratio_band(GdkPixbuf *img, guint8 thr, int x0, int x1)
+{
     int W=gdk_pixbuf_get_width(img), H=gdk_pixbuf_get_height(img);
     x0=clampi(x0,0,W-1); x1=clampi(x1,0,W-1);
     if(x0>x1){ int t=x0;x0=x1;x1=t; }
 
-    double *row = (double*)malloc(sizeof(double)*H);
+    double *row = (double*)malloc(sizeof(double)*(size_t)H);
     if(!row) return NULL;
 
-    for(int y=0;y<H;y++){
+    for(int y=0;y<H;y++)
+    {
         int black=0, tot=0;
-        for(int x=x0;x<=x1;x++){
+        for(int x=x0;x<=x1;x++)
+        {
             if(get_gray(img,x,y) < (int)thr) black++;
             tot++;
         }
@@ -311,8 +325,8 @@ static void process_word_band(GdkPixbuf *img, GdkPixbuf *disp,
 
     char word_dir[256];
     snprintf(word_dir, sizeof(word_dir), "letterInWord/word_%03d", word_idx);
-    ensure_dir_local("letterInWord");
-    ensure_dir_local(word_dir);
+    (void)ensure_dir_local("letterInWord");
+    (void)ensure_dir_local(word_dir);
 
     int Xleft = clampi(wx0, 0, Wsrc - 1);
     int Xright = clampi(wx1, 0, Wsrc - 1);
@@ -321,14 +335,16 @@ static void process_word_band(GdkPixbuf *img, GdkPixbuf *disp,
 
     const guint8 ink_thr = ink_thr_from(black_thr);
 
-    double *col = (double*)malloc(sizeof(double) * cw);
+    double *col = (double*)malloc(sizeof(double) * (size_t)cw);
     if (!col) return;
 
     double maxc = 0.0;
-    for (int x = 0; x < cw; x++){
+    for (int x = 0; x < cw; x++)
+    {
         int gx = Xleft + x;
         int black=0, tot=0;
-        for(int yy=y0; yy<=y1; yy++){
+        for(int yy=y0; yy<=y1; yy++)
+        {
             if(get_gray(img,gx,yy) < (int)ink_thr) black++;
             tot++;
         }
@@ -415,24 +431,25 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
     int max_x = clampi(wx1 + 200, 0, Wsrc - 1);
     const double GRID_DENSITY_THRESHOLD = 0.5;
 
-    for (int x = initial_wx1 + 1; x <= max_x; x++) {
+    for (int x = initial_wx1 + 1; x <= max_x; x++)
+    {
         int black_count = 0;
         int total_count = 0;
-        for (int y = wy0; y <= wy1; y++) {
+        for (int y = wy0; y <= wy1; y++)
+        {
             if (get_gray(img, x, y) < (int)black_thr) black_count++;
             total_count++;
         }
         if (total_count > 0 &&
-            ((double)black_count / (double)total_count) > GRID_DENSITY_THRESHOLD) {
+            ((double)black_count / (double)total_count) > GRID_DENSITY_THRESHOLD)
+        {
             max_x = x - 1;
             break;
         }
     }
     wx1 = max_x;
 
-    if(ensure_dir_local("letterInWord")!=0){
-        fprintf(stderr,"[detect_letterinword] Impossible de créer 'letterInWord' (on continue sans sauvegarde).\n");
-    }
+    (void)ensure_dir_local("letterInWord");
 
     double *row = row_ratio_band(img, black_thr, wx0, wx1);
     if(!row) return;
@@ -443,11 +460,15 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
     const double ROW_INK_THR = 0.05;
     const int MIN_GAP_BETWEEN_WORDS = 10;
 
-    for(int y=wy0; y<=wy1; y++){
-        if(row[y] > ROW_INK_THR){
+    for(int y=wy0; y<=wy1; y++)
+    {
+        if(row[y] > ROW_INK_THR)
+        {
             if(!in){ in=1; ystart=y; }
             last=y;
-        } else if(in && (y-last) > MIN_GAP_BETWEEN_WORDS){
+        }
+        else if(in && (y-last) > MIN_GAP_BETWEEN_WORDS)
+        {
             int y0=ystart, y1=last;
             in=0;
 
@@ -458,7 +479,8 @@ void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
         }
     }
 
-    if(in){
+    if(in)
+    {
         int y0=ystart, y1=last;
         process_word_band(img, disp, wx0, wx1, y0, y1,
                           black_thr, R, G, B, word_idx);
