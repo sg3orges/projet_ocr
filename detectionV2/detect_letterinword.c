@@ -84,7 +84,7 @@ static int ensure_dir_local(const char *path)
     if(access(path, F_OK)==0) return 0;
     if(mkdir(path,0755)==0) return 0;
     if(errno==EEXIST) return 0;
-    fprintf(stderr,"[detect_letterinword] mkdir('%s') a échoué: %s\n", path, strerror(errno));
+    fprintf(stderr,"[detect_letterinword] mkdir('%s') failed: %s\n", path, strerror(errno));
     return -1;
 }
 
@@ -161,7 +161,7 @@ static int save_letter_with_margin_word(GdkPixbuf *img, GdkPixbuf *disp,
                  "%s/letter_%03d.png", word_dir, letter_idx);
 
         if (!gdk_pixbuf_save(scaled, out_path, "png", NULL, NULL))
-            fprintf(stderr, "[detect_letterinword] Échec sauvegarde %s\n", out_path);
+            fprintf(stderr, "[detect_letterinword] Save failed %s\n", out_path);
 
         g_object_unref(scaled);
         letter_idx++;

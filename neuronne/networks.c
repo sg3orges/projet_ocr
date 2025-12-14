@@ -105,7 +105,7 @@ void load_dataset(double inputs[NUM_TRAINING_SETS][NUM_INPUTS],
     char filepath[1024];
     int idx = 0;
     
-    printf("Chargement des images...\n");
+    printf("Loading images...\n");
     for (int version = 1; version <= 5; version++) {
         for (char c = 'A'; c <= 'Z'; c++) {
             if (idx >= NUM_TRAINING_SETS) break;
@@ -118,7 +118,7 @@ void load_dataset(double inputs[NUM_TRAINING_SETS][NUM_INPUTS],
             idx++;
         }
     }
-    printf("Dataset chargé : %d images.\n", idx);
+    printf("Dataset loaded: %d images.\n", idx);
 }
 
 // neuron
@@ -274,7 +274,7 @@ void save_network(NeuralNetwork *net, const char *filename) {
     }
     
     fclose(f);
-    printf("Réseau sauvegardé dans '%s'.\n", filename);
+    printf("Network saved to '%s'.\n", filename);
 }
 
 int load_network(NeuralNetwork *net, const char *filename) {
@@ -297,11 +297,11 @@ int load_network(NeuralNetwork *net, const char *filename) {
     fclose(f);
 
     if (res == 0) {
-        printf("Erreur: Le fichier de sauvegarde semble corrompu ou vide.\n");
+        printf("Error: Save file appears corrupted or empty.\n");
         return 0;
     }
 
-    printf("Réseau chargé depuis '%s'.\n", filename);
+    printf("Network loaded from '%s'.\n", filename);
     return 1; 
 }
 

@@ -290,7 +290,7 @@ static void apply_black_and_white(GdkPixbuf *pixbuf)
 
 // --------------------------------------------------
 // Suppression BRUTE des paquets
-// Seuil FIXÉ À 35000
+// Threshold FIXED AT 35000
 // --------------------------------------------------
 static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
 {
@@ -306,7 +306,7 @@ static void remove_large_blobs_fixed(GdkPixbuf *pixbuf)
 
     int min_area = 35000; // FIXE
 
-    // 15% de l'image (pour protéger la grille si jamais elle est géante)
+    // 15% of the image (to protect the grid if it's giant)
     int safe_size = (w * h) * 0.15; 
 
     printf("\n--- CLEANING (Seuil FIXE: %d) ---\n", min_area);
@@ -494,7 +494,7 @@ static void on_clean_clicked(GtkWidget *widget, gpointer user_data)
     // 1. Noir et Blanc
     apply_black_and_white(current_display_pixbuf);
     
-    // 2. Suppression Brute (Seuil fixé à 35000)
+    // 2. Brute Deletion (Threshold fixed at 35000)
     remove_large_blobs_fixed(current_display_pixbuf);
 
     // 3. Ajout du cadre Intelligent (Scan Bas -> Haut)
@@ -511,7 +511,7 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
         return;
     }
 
-    // On s'assure que ce qui est sauvegardé est en Noir & Blanc
+    // Make sure what is saved is in Black & White
     GdkPixbuf *to_save = gdk_pixbuf_copy(current_display_pixbuf);
     apply_black_and_white(to_save);
 
@@ -528,7 +528,7 @@ static void on_save_clicked(GtkWidget *widget, gpointer user_data)
     else 
         g_snprintf(output_path, sizeof(output_path), "images/output_processed.png");
 
-    // Crée le dossier de sortie au besoin
+    // Create output folder if needed
     g_mkdir_with_parents("images", 0755);
 
     GError *err = NULL;
@@ -610,7 +610,7 @@ void run_gui(int argc, char *argv[])
     g_signal_connect(btn_clean, "clicked", G_CALLBACK(on_clean_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_clean, FALSE, FALSE, 5);
 
-    GtkWidget *btn_save = gtk_button_new_with_label("Suivant");
+    GtkWidget *btn_save = gtk_button_new_with_label("Next");
     g_signal_connect(btn_save, "clicked", G_CALLBACK(on_save_clicked), NULL);
     gtk_box_pack_start(GTK_BOX(hbox), btn_save, FALSE, FALSE, 5);
 
@@ -632,11 +632,11 @@ void run_gui(int argc, char *argv[])
         char *quoted = g_shell_quote(next_image_path);
         // On utilise system() pour bloquer le processus parent tant que le fils tourne
         char *cmd = g_strdup_printf("./ocr_project detect %s", quoted);
-        printf("[Info] Lancement synchrone : %s\n", cmd);
+        printf("[Info] Synchronous launch: %s\n", cmd);
         
         // system() retourne le code de sortie
         int ret = system(cmd);
-        printf("[Info] Detection terminee (code %d).\n", ret);
+        printf("[Info] Detection completed (code %d).\n", ret);
 
         g_free(quoted);
         g_free(cmd);

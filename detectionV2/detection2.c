@@ -8,7 +8,7 @@
 #include "detection.h"
 #include "networks.h"
 
-// Gestion des conflits de macro MAX avec solver.h / glib
+
 #ifdef MAX
 #undef MAX
 #endif
@@ -28,7 +28,7 @@ static void on_detect_destroy(GtkWidget *widget, gpointer user_data)
 static void on_overlay_close(GtkWidget *widget, gpointer user_data)
 {
     (void)widget; (void)user_data;
-    g_print("[Info] Fermeture demandee par l'utilisateur. Arret du processus.\n");
+    g_print("[Info] Closure requested by user. Stopping process.\n");
     exit(0);
 }
 
@@ -110,15 +110,7 @@ static void draw_line(GdkPixbuf *pix, int x0, int y0, int x1, int y1, int thickn
     }
 }
 
-// Check if point P(x,y) is inside rectangle defined by corners p1, p2, p4 (p3 is opposite p1)
-// Order from main: p1(TL), p3(TR), p4(BR), p2(BL) - wait, let's look at generation order:
-// p1(TL), p2(BL), p3(TR), p4(BR) ? 
-// In generation: 
-// p1 = Start - ext + perp  (Top Left relative to direction)
-// p3 = End + ext + perp    (Top Right)
-// p4 = End + ext - perp    (Bottom Right)
-// p2 = Start - ext - perp  (Bottom Left)
-// So order 1 -> 3 -> 4 -> 2 is cyclic.
+
 static int is_inside_quad(int x, int y, int p1x, int p1y, int p3x, int p3y, int p4x, int p4y, int p2x, int p2y)
 {
     // Simple cross product check for convex quad
@@ -187,8 +179,7 @@ __attribute__((unused)) static void refine_box_position(GdkPixbuf *pix, int *p1x
         double dx = center_x - th_cx;
         double dy = center_y - th_cy;
         
-        // Clamp shift to avoid jumping too far (e.g. max 50% of the box size)
-        // Hardcoded clamp for safety: +/- 15 pixels is usually enough for alignment jitter
+
         if(dx > 20) dx = 20; if(dx < -20) dx = -20;
         if(dy > 20) dy = 20; if(dy < -20) dy = -20;
 
@@ -266,9 +257,7 @@ __attribute__((unused)) static double periodicity_score(const double *p, int n)
     return autocorr_strength(p, n, lag_min, lag_max);
 }
 
-// --------------------------------------------------
-// Cell position persistence
-// --------------------------------------------------
+
 static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
 {
     if (!root_dir || !g_grid_bbox_set || nb_rows <= 0 || nb_cols <= 0) return;
@@ -288,10 +277,10 @@ static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
     }
     GError *err = NULL;
     if (!g_file_set_contents(pos_path, out->str, -1, &err)) {
-        g_printerr("[Warn] Impossible d'ecrire CELLPOS (%s): %s\n", pos_path, err->message);
+        g_printerr("[Warn] Cannot write CELLPOS (%s): %s\n", pos_path, err->message);
         g_clear_error(&err);
     } else {
-        g_print("[Info] CELLPOS genere -> %s\n", pos_path);
+        g_print("[Info] CELLPOS generated -> %s\n", pos_path);
     }
     g_string_free(out, TRUE);
     g_free(pos_path);
@@ -305,7 +294,7 @@ __attribute__((unused)) static GPtrArray *load_cell_positions(const char *root_d
     gsize len = 0;
     GError *err = NULL;
     if (!g_file_get_contents(pos_path, &data, &len, &err)) {
-        g_printerr("[Warn] Impossible de lire CELLPOS (%s): %s\n", pos_path, err->message);
+        g_printerr("[Warn] Cannot read CELLPOS (%s): %s\n", pos_path, err->message);
         g_clear_error(&err);
         g_free(pos_path);
         return NULL;
@@ -441,9 +430,9 @@ static void write_gridl_file(const char *root_dir, const GPtrArray *cells, int m
     char *gridl_path = root_dir ? g_build_filename(root_dir, "GRIDL", NULL) : g_strdup("GRIDL");
     GError *err = NULL;
     if (g_file_set_contents(gridl_path, out->str, -1, &err))
-        g_print("[Info] Fichier GRIDL mis a jour (%dx%d) -> %s\n", max_col, max_row, gridl_path);
+        g_print("[Info] GRIDL file updated (%dx%d) -> %s\n", max_col, max_row, gridl_path);
     else {
-        g_printerr("[Error] Ecriture GRIDL echouee (%s): %s\n", gridl_path, err->message);
+        g_printerr("[Error] GRIDL write failed (%s): %s\n", gridl_path, err->message);
         g_clear_error(&err);
     }
     g_free(gridl_path);
@@ -568,7 +557,7 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
         draw_line(disp, p2x, p2y, p1x, p1y, LINE_WIDTH, col.r, col.g, col.b);
     }
 
-    // Affichage Fenêtre
+    // Window Display
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "Solution (Auto-Correction)");
     gtk_window_set_default_size(GTK_WINDOW(win), MIN(gdk_pixbuf_get_width(disp), 1200), MIN(gdk_pixbuf_get_height(disp), 900));
@@ -579,7 +568,7 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
     GtkWidget *imgw = gtk_image_new_from_pixbuf(disp);
     gtk_container_add(GTK_CONTAINER(scroll), imgw);
-    GtkWidget *btn_close = gtk_button_new_with_label("Fermer");
+    GtkWidget *btn_close = gtk_button_new_with_label("Close");
     gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 5);
     g_signal_connect(btn_close, "clicked", G_CALLBACK(on_overlay_close), NULL);
 
@@ -707,7 +696,7 @@ static int solve_words_in_grid(const char *root_dir,
     char matrice[MAX_MAT][MAX_MAT]; // Updated to MAX_MAT
     int nbLignes = CreaMatrice(grid_path, matrice);
     if (nbLignes <= 0) {
-        g_printerr("[Error] Lecture GRIDL echouee (%s)\n", grid_path);
+        g_printerr("[Error] GRIDL read failed (%s)\n", grid_path);
         g_free(grid_path);
         g_free(words_path);
         return 0;
@@ -718,7 +707,7 @@ static int solve_words_in_grid(const char *root_dir,
 
     FILE *fw = fopen(words_path, "r");
     if (!fw) {
-        g_printerr("[Error] Lecture GRIDWO echouee (%s)\n", words_path);
+        g_printerr("[Error] GRIDWO read failed (%s)\n", words_path);
         g_free(grid_path);
         g_free(words_path);
         return 0;
@@ -758,7 +747,7 @@ static void run_solver_pipeline(void)
 {
     char *root_dir = find_project_root();
     if (!root_dir) {
-        g_printerr("[Error] Impossible de localiser le dossier 'cells'. Abandon.\n");
+        g_printerr("[Error] Cannot locate 'cells' folder. Aborting.\n");
         return;
     }
 
@@ -767,7 +756,7 @@ static void run_solver_pipeline(void)
 
     const char *save_file = "neuronne/brain.bin";
     if (!load_network(&net, save_file)) {
-        g_printerr("[Warn] Aucune sauvegarde du reseau. Entrainement en cours...\n");
+        g_printerr("[Warn] No network save found. Training in progress...\n");
         train_network(&net, "neuronne/dataset");
         save_network(&net, save_file);
     }
@@ -776,7 +765,7 @@ static void run_solver_pipeline(void)
     char *cells_path = g_build_filename(root_dir, "cells", NULL);
     GDir *dir = g_dir_open(cells_path, 0, NULL);
     if (!dir) {
-        g_printerr("[Error] Impossible d'ouvrir le dossier cells (%s)\n", cells_path);
+        g_printerr("[Error] Cannot open cells folder (%s)\n", cells_path);
         g_free(cells_path);
         g_free(root_dir);
         g_ptr_array_free(cells, TRUE);
@@ -818,7 +807,7 @@ static void run_solver_pipeline(void)
     g_free(cells_path);
 
     if (cells->len == 0) {
-        g_printerr("[Error] Aucun fichier dans cells/*\n");
+        g_printerr("[Error] No files in cells/*\n");
         g_ptr_array_free(cells, TRUE);
         cleanup(&net);
         g_free(root_dir);
@@ -834,7 +823,7 @@ static void run_solver_pipeline(void)
     char *words_dir = g_build_filename(root_dir, "letterInWord", NULL);
     GDir *words = g_dir_open(words_dir, 0, NULL);
     if (!words) {
-        g_printerr("[Warn] Dossier letterInWord introuvable (%s), GRIDWO non genere.\n", words_dir);
+        g_printerr("[Warn] letterInWord folder not found (%s), GRIDWO not generated.\n", words_dir);
     } else {
         GPtrArray *word_names = g_ptr_array_new_with_free_func(g_free);
         const char *wname = NULL;
@@ -845,7 +834,7 @@ static void run_solver_pipeline(void)
         g_dir_close(words);
 
         if (word_names->len == 0) {
-            g_printerr("[Warn] Aucun dossier word_* dans letterInWord, GRIDWO vide.\n");
+            g_printerr("[Warn] No word_* folder in letterInWord, GRIDWO empty.\n");
         } else {
             qsort(word_names->pdata, word_names->len, sizeof(gpointer), cmp_str_ptr);
             GString *out_words = g_string_new("");
@@ -854,7 +843,7 @@ static void run_solver_pipeline(void)
                 char *word_path = g_build_filename(words_dir, (char *)g_ptr_array_index(word_names, wi), NULL);
                 GDir *letters_dir = g_dir_open(word_path, 0, NULL);
                 if (!letters_dir) {
-                    g_printerr("[Warn] Impossible d'ouvrir %s\n", word_path);
+                    g_printerr("[Warn] Cannot open %s\n", word_path);
                     g_free(word_path);
                     continue;
                 }
@@ -886,9 +875,9 @@ static void run_solver_pipeline(void)
             char *gridwo_path = g_build_filename(root_dir, "GRIDWO", NULL);
             GError *err = NULL;
             if (g_file_set_contents(gridwo_path, out_words->str, -1, &err))
-                g_print("[Info] Fichier GRIDWO genere -> %s\n", gridwo_path);
+                g_print("[Info] GRIDWO file generated -> %s\n", gridwo_path);
             else {
-                g_printerr("[Error] Ecriture GRIDWO echouee (%s): %s\n", gridwo_path, err->message);
+                g_printerr("[Error] GRIDWO write failed (%s): %s\n", gridwo_path, err->message);
                 g_clear_error(&err);
             }
             g_free(gridwo_path);
@@ -1096,7 +1085,7 @@ static void on_solve_clicked(GtkWidget *widget, gpointer user_data)
 {
     GtkWidget *win = GTK_WIDGET(user_data);
     (void)widget;
-    g_print("[Info] Bouton Resoudre clique : generation de GRIDL via reseau de neurones...\n");
+    g_print("[Info] Solve button clicked: generating GRIDL via neural network...\n");
     run_solver_pipeline();
     if (win) gtk_widget_hide(win);
 }
@@ -1116,7 +1105,7 @@ static void run_detection(GtkWidget *win,const char *path)
     GdkPixbuf *img=gdk_pixbuf_new_from_file(path,&err);
     if(!img)
     {
-        g_printerr("Erreur: %s\n",err->message);
+        g_printerr("Error: %s\n",err->message);
         g_clear_error(&err);
         return;
     }
@@ -1144,7 +1133,7 @@ static void run_detection(GtkWidget *win,const char *path)
     GtkWidget *imgw=gtk_image_new_from_pixbuf(disp);
     gtk_box_pack_start(GTK_BOX(box), imgw, TRUE, TRUE, 0);
 
-    GtkWidget *btn_solve = gtk_button_new_with_label("Resoudre");
+    GtkWidget *btn_solve = gtk_button_new_with_label("Solve");
     g_signal_connect(btn_solve, "clicked", G_CALLBACK(on_solve_clicked), win);
     gtk_box_pack_start(GTK_BOX(box), btn_solve, FALSE, FALSE, 4);
 
@@ -1158,7 +1147,7 @@ static void on_open(GApplication *app,GFile **files,int n,const char *hint)
 {
     (void)n; (void)hint;
     GtkWidget *win=gtk_application_window_new(GTK_APPLICATION(app));
-    gtk_window_set_title(GTK_WINDOW(win),"Détection grille et mots (GTK3)");
+    gtk_window_set_title(GTK_WINDOW(win),"Grid and Word Detection (GTK3)");
     gtk_window_set_default_size(GTK_WINDOW(win),1100,800);
     char *path=g_file_get_path(files[0]);
     run_detection(win,path);

@@ -1,15 +1,15 @@
 #include <stdio.h>
 #include <string.h>
-#include "solver.h" // Toujours inclure le header correspondant
+#include "solver.h" // Always include the corresponding header
 
-// MAX_MAT est défini dans solver.h
+// MAX_MAT is defined in solver.h
 
 int CreaMatrice(const char *Fichier , char matrice[MAX_MAT][MAX_MAT])
 {
     FILE *f = fopen(Fichier, "r");
     if(f == NULL)
     {
-        printf("Erreur : Impossible d'ouvrir le fichier %s\n", Fichier);
+        printf("Error: Cannot open file %s\n", Fichier);
         return 0;
     } 
     int ligne = 0;
@@ -76,7 +76,7 @@ void solver_test(int argc, char *argv[])
     // Donc argv[0] sera "solver", argv[1] le fichier, argv[2] le mot.
     if (argc < 3)
     {
-        printf("Usage: ./ocr solver <grille.txt> <mot>\n");
+        printf("Usage: ./ocr solver <grid.txt> <word>\n");
         return;
     }   
 
@@ -86,9 +86,6 @@ void solver_test(int argc, char *argv[])
 
     int nbColonnes = strlen(matrice[0]); 
     
-    // Attention: argv[2] est le mot. 
-    // On copie le mot pour pouvoir le modifier (ConvertirMajuscules) 
-    // car argv peut être en lecture seule selon les systèmes.
     char mot_a_chercher[100];
     strncpy(mot_a_chercher, argv[2], 99);
     mot_a_chercher[99] = '\0';
@@ -98,9 +95,9 @@ void solver_test(int argc, char *argv[])
     int dL, dC, fL, fC;
     if(ChercheMot(mot_a_chercher, matrice, nbLignes, nbColonnes, &dL, &dC, &fL, &fC))
     {
-        printf("Mot TROUVÉ de (%d,%d) à (%d,%d)\n", dL, dC, fL, fC);
+        printf("Word FOUND from (%d,%d) to (%d,%d)\n", dL, dC, fL, fC);
     }
     else {
-        printf("Mot NON trouvé.\n");
+        printf("Word NOT found.\n");
     }
 }

@@ -2,19 +2,17 @@
 
 EXEC = ocr_project
 
-# Dossiers contenant les sources
 SRC_DIRS = rotations interface detectionV2 neuronne solver xnor
 
-# Récupère tous les .c sauf ceux nommés main.c dans les sous-dossiers
 SUB_SRC = $(foreach dir,$(SRC_DIRS),$(filter-out $(dir)/main.c,$(wildcard $(dir)/*.c)))
 
-# Le main principal (dans la racine du projet)
+
 MAIN_SRC = main.c
 
-# Liste complète des sources
+
 SRC = $(MAIN_SRC) $(SUB_SRC)
 
-# Objets générés à côté des .c
+
 OBJ = $(SRC:.c=.o)
 
 
@@ -44,7 +42,6 @@ all: $(EXEC)
 $(EXEC): $(OBJ)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
-# Compilation d'un .c → .o dans le même dossier
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
