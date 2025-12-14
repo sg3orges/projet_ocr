@@ -111,8 +111,25 @@ static int parse_cell_filename(const char *name, int *col, int *row, int *idx)
     return 0;
 }
 
+static void cleanup_all_cells(const char *dirpath)
+{
+    DIR *d = opendir(dirpath);
+    if (!d) return;
+
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL)
+    {
+        if (de->d_name[0] == '.') continue;
+        char fullpath[512];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dirpath, de->d_name);
+        (void)unlink(fullpath);
+    }
+    closedir(d);
+}
+
 static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
 {
+    // Legacy logic preserved if needed, but we rely on cleanup_all_cells for fresh start
     int best_idx[65][65];
     char best_name[65][65][256];
 
@@ -376,6 +393,7 @@ static void clean_letter_pixbuf(GdkPixbuf *pix)
 
 static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
                               int min_x, int min_y, int max_x, int max_y,
+                              int cell_x0, int cell_y0, int cell_x1, int cell_y1,
                               guint8 R, guint8 G, guint8 B,
                               int col_idx, int row_idx, int letter_idx,
                               int margin)
@@ -406,6 +424,15 @@ static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
     char path[512];
     snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png", col_idx, row_idx, letter_idx);
     (void)gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
+
+    // [New] Save coordinates (Cell Boundaries instead of Ink)
+    {
+        FILE *f = fopen("cells/coords.txt", "a");
+        if (f) {
+            fprintf(f, "%d %d %d %d %d %d\n", col_idx, row_idx, cell_x0, cell_y0, cell_x1, cell_y1);
+            fclose(f);
+        }
+    }
 
     g_object_unref(scaled);
     return letter_idx + 1;
@@ -485,6 +512,15 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
     char path[512];
     snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png", col_idx, row_idx, letter_idx);
     (void)gdk_pixbuf_save(out, path, "png", NULL, NULL);
+
+    // [New] Save coordinates for fallback path (using ink bounds as cell bounds)
+    {
+        FILE *f = fopen("cells/coords.txt", "a");
+        if (f) {
+            fprintf(f, "%d %d %d %d %d %d\n", col_idx, row_idx, min_x, min_y, max_x, max_y);
+            fclose(f);
+        }
+    }
 
     g_object_unref(out);
     return letter_idx + 1;
@@ -641,6 +677,9 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
     const int MIN_PIXELS_IN_CELL = 25;
     const int CELL_INNER_MARGIN  = 4;
 
+    // [New] Reset coords file
+    (void)unlink("cells/coords.txt");
+
     int letter_idx = 0;
 
     for (int r = 0; r < nh - 1; ++r)
@@ -688,6 +727,7 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
 
             letter_idx = save_letter_simple(img, disp,
                                             min_x, min_y, max_x, max_y,
+                                            x_left, y_top, x_right, y_bot,
                                             R, G, B,
                                             col_idx, row_idx,
                                             letter_idx,
@@ -884,8 +924,40 @@ int area   = width * height;
     g_free(visited);
 
     int letter_idx = 0;
+    
+    // Check for Grid Regularity
+    // If grid lines are found but are very irregular (high variance in spacing),
+    // it's likely noise or a skewed grid. Fallback to clustering.
+    gboolean irregular_grid = FALSE;
 
-    if (nv < 2 || nh < 2)
+    if (nv > 5) {
+        double sum = 0;
+        int cnt = 0;
+        for(int i=0; i<nv-1; ++i) { sum += (vx[i+1]-vx[i]); cnt++; }
+        double mean = (cnt > 0) ? sum / cnt : 0;
+        double var = 0;
+        for(int i=0; i<nv-1; ++i) { double d = (vx[i+1]-vx[i]) - mean; var += d*d; }
+        if(cnt > 0) var /= cnt;
+        double std = sqrt(var);
+        if (mean > 0 && (std / mean > 0.25)) irregular_grid = TRUE; // >25% variance
+    }
+
+    if (!irregular_grid && nh > 5) {
+        double sum = 0;
+        int cnt = 0;
+        for(int i=0; i<nh-1; ++i) { sum += (vy[i+1]-vy[i]); cnt++; }
+        double mean = (cnt > 0) ? sum / cnt : 0;
+        double var = 0;
+        for(int i=0; i<nh-1; ++i) { double d = (vy[i+1]-vy[i]) - mean; var += d*d; }
+        if(cnt > 0) var /= cnt;
+        double std = sqrt(var);
+        if (mean > 0 && (std / mean > 0.25)) irregular_grid = TRUE;
+    }
+
+    // Fallback condition:
+    // 1. Too few lines (< 5)
+    // 2. Irregular spacing (likely skewed/perspective/noise)
+    if (nv < 5 || nh < 5 || irregular_grid)
     {
         g_array_sort(cands, cmp_cy);
 
@@ -986,6 +1058,7 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     if (gx1 - gx0 < 5 || gy1 - gy0 < 5) return;
 
     (void)ensure_dir("cells");
+    cleanup_all_cells("cells"); // [New] Wipe cells directory before start
 
     int nb_cells = 0;
     int nb_letters = detect_letters_by_cells(img, disp,

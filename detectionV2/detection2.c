@@ -80,44 +80,116 @@ static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     }
 }
 
-static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
+static void draw_capsule(GdkPixbuf *pix, int x1, int y1, int x2, int y2, int r,
+                         guint8 R, guint8 G, guint8 B)
 {
-    if (!root_dir || !g_grid_bbox_set || nb_rows <= 0 || nb_cols <= 0) return;
-    double stepX = (double)(g_grid_x1 - g_grid_x0 + 1) / (double)nb_cols;
-    double stepY = (double)(g_grid_y1 - g_grid_y0 + 1) / (double)nb_rows;
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int n = gdk_pixbuf_get_n_channels(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *pixels = gdk_pixbuf_get_pixels(pix);
 
-    char *pos_path = g_build_filename(root_dir, "CELLPOS", NULL);
-    GString *out = g_string_new("");
-    for (int r = 0; r < nb_rows; r++) {
-        for (int c = 0; c < nb_cols; c++) {
-            int x0 = g_grid_x0 + (int)floor(c * stepX);
-            int y0 = g_grid_y0 + (int)floor(r * stepY);
-            int x1 = g_grid_x0 + (int)floor((c + 1) * stepX) - 1;
-            int y1 = g_grid_y0 + (int)floor((r + 1) * stepY) - 1;
-            g_string_append_printf(out, "%d %d %d %d %d %d\n", c, r, x0, y0, x1, y1);
+    int min_x = clampi(fmin(x1, x2) - r, 0, W - 1);
+    int max_x = clampi(fmax(x1, x2) + r, 0, W - 1);
+    int min_y = clampi(fmin(y1, y2) - r, 0, H - 1);
+    int max_y = clampi(fmax(y1, y2) + r, 0, H - 1);
+
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len_sq = dx*dx + dy*dy;
+    float len = sqrtf(len_sq);
+
+    // Normalized segment vector
+    float ux = (len > 0) ? dx / len : 0;
+    float uy = (len > 0) ? dy / len : 0;
+
+    for (int y = min_y; y <= max_y; y++) {
+        for (int x = min_x; x <= max_x; x++) {
+            float px = x - x1;
+            float py = y - y1;
+
+            // Project point onto line (clamped to segment)
+            float t = px*ux + py*uy;
+            t = fmaxf(0.0f, fminf(len, t));
+
+            float closest_x = x1 + t*ux;
+            float closest_y = y1 + t*uy;
+
+            float dist_sq = (x - closest_x)*(x - closest_x) + (y - closest_y)*(y - closest_y);
+
+            if (dist_sq <= r*r) {
+                // Determine alpha for anti-aliasing (simple edge blending)
+                // Using 1.0 thickness for AA ring
+                // float dist = sqrtf(dist_sq);
+                // float alpha = 1.0f - fmaxf(0.0f, fminf(1.0f, dist - (r - 1.0f)));
+                
+                // For simplicity, just solid color first or simple alpha blend 
+                // if we want it to look nice (but user asked for pure surround)
+                // Let's do simple alpha blending to look correct on top of image
+                // Or just solid overwrite? The prototype asked for "surround", usually means outline or solid highlight?
+                // "entoure tout les mot" -> circle/capsule around. 
+                // Let's do a hollow capsule? Or semi-transparent?
+                // "entoure" usually means outline.
+                // If I draw a filled capsule it acts like a highlighter marker.
+                // If I draw outline, it's a boundary.
+                // Let's try Outline Capsule logic.
+                
+                // Outline only:
+                // float inner_r = r - 3.0f; 
+                // if (dist_sq <= r*r && dist_sq >= inner_r*inner_r) { ... }
+                
+                // User said "entoure" (encircle/surround). 
+                // A hollow capsule of thickness ~3px is best.
+                
+                float dist = sqrtf(dist_sq);
+                if (dist >= r - 3.0f && dist <= r) {
+                     guchar *p = pixels + y*rs + x*n;
+                     p[0] = R; p[1] = G; p[2] = B;
+                }
+            }
         }
     }
-    GError *err = NULL;
-    if (!g_file_set_contents(pos_path, out->str, -1, &err)) {
-        g_printerr("[Warn] Impossible d'ecrire CELLPOS (%s): %s\n", pos_path, err->message);
-        g_clear_error(&err);
-    } else {
-        g_print("[Info] CELLPOS genere -> %s\n", pos_path);
-    }
-    g_string_free(out, TRUE);
-    g_free(pos_path);
+}
+
+static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
+{
+    // Legacy function - kept empty or just does nothing as we use coords.txt now
+    // But detection2.c seems to rely on CELLPOS for fallback? 
+    // Actually we can update this to write a dummy or just ignore.
 }
 
 static GPtrArray *load_cell_positions(const char *root_dir)
 {
     if (!root_dir) return NULL;
+    char *txt_path = g_build_filename(root_dir, "cells", "coords.txt", NULL);
+    
+    // Try reading coords.txt first
+    if (g_file_test(txt_path, G_FILE_TEST_EXISTS)) {
+        gchar *data = NULL;
+        if (g_file_get_contents(txt_path, &data, NULL, NULL)) {
+             GPtrArray *arr = g_ptr_array_new_with_free_func(g_free);
+             gchar **lines = g_strsplit(data, "\n", -1);
+             for (int i = 0; lines[i]; i++) {
+                 int c, r, x0, y0, x1, y1;
+                 if (sscanf(lines[i], "%d %d %d %d %d %d", &c, &r, &x0, &y0, &x1, &y1) == 6) {
+                     CellBBox *cb = g_malloc(sizeof(CellBBox));
+                     cb->col = c; cb->row = r; cb->x0 = x0; cb->y0 = y0; cb->x1 = x1; cb->y1 = y1;
+                     g_ptr_array_add(arr, cb);
+                 }
+             }
+             g_strfreev(lines);
+             g_free(data);
+             g_free(txt_path);
+             g_print("[Info] Loaded EXACT coords from coords.txt\n");
+             return arr;
+        }
+    }
+    g_free(txt_path);
+
+    // Fallback to CELLPOS
     char *pos_path = g_build_filename(root_dir, "CELLPOS", NULL);
     gchar *data = NULL;
-    gsize len = 0;
-    GError *err = NULL;
-    if (!g_file_get_contents(pos_path, &data, &len, &err)) {
-        g_printerr("[Warn] Impossible de lire CELLPOS (%s): %s\n", pos_path, err->message);
-        g_clear_error(&err);
+    if (!g_file_get_contents(pos_path, &data, NULL, NULL)) {
         g_free(pos_path);
         return NULL;
     }
@@ -279,6 +351,9 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
         g_clear_error(&err);
         return;
     }
+    // Convert to RGB (remove alpha) to ensure drawing works simply if needed, 
+    // but GdkPixbuf usually handles alpha fine. 
+    // We want to draw on top.
     GdkPixbuf *disp = gdk_pixbuf_copy(img);
 
     char *root_dir = find_project_root();
@@ -294,50 +369,89 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     int H = y1 - y0 + 1;
     double stepX = (nb_cols > 0) ? (double)W / (double)nb_cols : 48.0;
     double stepY = (nb_rows > 0) ? (double)H / (double)nb_rows : 48.0;
-    double insetX = stepX * 0.20;
-    double insetY = stepY * 0.20;
 
     for (guint i = 0; i < results->len; i++) {
         SolveResult *sr = g_ptr_array_index((GPtrArray *)results, i);
         if (!sr->found) continue;
 
-        int len = (sr->word) ? (int)strlen(sr->word) : 0;
-        int dc = (sr->c2 > sr->c1) ? 1 : (sr->c2 < sr->c1 ? -1 : 0);
-        int dr = (sr->r2 > sr->r1) ? 1 : (sr->r2 < sr->r1 ? -1 : 0);
-        if (len <= 0) {
-            len = abs(sr->c2 - sr->c1) + abs(sr->r2 - sr->r1) + 1;
-        }
-
         WordColor col = word_color_for_index((int)i);
 
-        for (int k = 0; k < len; k++) {
-            int c = sr->c1 + dc * k;
-            int r = sr->r1 + dr * k;
-            int rx0, ry0, rx1, ry1;
+        // Determine start and end centers
+        int x1, y1, x2, y2;
+        int w1 = 0, h1 = 0, w2 = 0, h2 = 0;
 
-            CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c, r) : NULL;
-            if (cb) {
-                int w = cb->x1 - cb->x0 + 1;
-                int h = cb->y1 - cb->y0 + 1;
-                int inset_px_x = (int)llround(w * 0.08);
-                int inset_px_y = (int)llround(h * 0.08);
-                rx0 = clampi(cb->x0 + inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
-                ry0 = clampi(cb->y0 + inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
-                rx1 = clampi(cb->x1 - inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
-                ry1 = clampi(cb->y1 - inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
-            } else {
-                rx0 = x0 + (int)llround(c * stepX + insetX);
-                ry0 = y0 + (int)llround(r * stepY + insetY);
-                rx1 = x0 + (int)llround((c + 1) * stepX - insetX) - 1;
-                ry1 = y0 + (int)llround((r + 1) * stepY - insetY) - 1;
-            }
-
-            draw_rect(disp, rx0, ry0, rx1, ry1, col.r, col.g, col.b);
+        // Start cell
+        CellBBox *cb_start = cell_positions ? lookup_cell_bbox(cell_positions, sr->c1 + 1, sr->r1 + 1) : NULL;
+        if (cb_start) {
+            x1 = (cb_start->x0 + cb_start->x1) / 2;
+            y1 = (cb_start->y0 + cb_start->y1) / 2;
+            w1 = cb_start->x1 - cb_start->x0;
+            h1 = cb_start->y1 - cb_start->y0;
+        } else {
+            x1 = x0 + (int)(sr->c1 * stepX + stepX/2);
+            y1 = y0 + (int)(sr->r1 * stepY + stepY/2);
+            w1 = (int)stepX;
+            h1 = (int)stepY;
         }
+
+        // End cell
+        CellBBox *cb_end = cell_positions ? lookup_cell_bbox(cell_positions, sr->c2 + 1, sr->r2 + 1) : NULL;
+        if (cb_end) {
+            x2 = (cb_end->x0 + cb_end->x1) / 2;
+            y2 = (cb_end->y0 + cb_end->y1) / 2;
+            w2 = cb_end->x1 - cb_end->x0;
+            h2 = cb_end->y1 - cb_end->y0;
+        } else {
+            x2 = x0 + (int)(sr->c2 * stepX + stepX/2);
+            y2 = y0 + (int)(sr->r2 * stepY + stepY/2);
+            w2 = (int)stepX;
+            h2 = (int)stepY;
+        }
+        
+        // Average cell size (diameter)
+        double cell_size = (double)(w1 + w2 + h1 + h2) / 4.0;
+        double radius = cell_size * 0.5;
+
+        // Vector D = P2 - P1
+        double dx = (double)(x2 - x1);
+        double dy = (double)(y2 - y1);
+        double len = sqrt(dx*dx + dy*dy);
+        
+        // Normalized direction
+        double ux = (len > 0.001) ? dx / len : 0.0;
+        double uy = (len > 0.001) ? dy / len : 0.0;
+        
+        // Orthogonal vector (Normal)
+        double nx = -uy;
+        double ny = ux;
+
+        double pad_len = radius * 0.8;  // Extend a bit more past the center (was 0.5)
+        double pad_width = radius * 1.1; // Make it wider (was 0.9)
+
+        // 4 Corners: 
+        // Start side
+        int ax = (int)(x1 - pad_len * ux + pad_width * nx);
+        int ay = (int)(y1 - pad_len * uy + pad_width * ny);
+        int bx = (int)(x1 - pad_len * ux - pad_width * nx);
+        int by = (int)(y1 - pad_len * uy - pad_width * ny);
+
+        // End side
+        int cx = (int)(x2 + pad_len * ux - pad_width * nx);
+        int cy = (int)(y2 + pad_len * uy - pad_width * ny);
+        int dx_ = (int)(x2 + pad_len * ux + pad_width * nx);
+        int dy_ = (int)(y2 + pad_len * uy + pad_width * ny);
+
+        // Draw Frame (4 lines) using capsule for nice rounded caps on the lines
+        int thick = 3;
+        draw_capsule(disp, ax, ay, bx, by, thick, col.r, col.g, col.b); // Back
+        draw_capsule(disp, bx, by, cx, cy, thick, col.r, col.g, col.b); // Side 1
+        draw_capsule(disp, cx, cy, dx_, dy_, thick, col.r, col.g, col.b); // Front
+        draw_capsule(disp, dx_, dy_, ax, ay, thick, col.r, col.g, col.b); // Side 2
     }
 
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win), "Solutions (overlay)");
+    // Use actual image size
     gtk_window_set_default_size(GTK_WINDOW(win), gdk_pixbuf_get_width(disp), gdk_pixbuf_get_height(disp));
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_container_add(GTK_CONTAINER(win), box);
