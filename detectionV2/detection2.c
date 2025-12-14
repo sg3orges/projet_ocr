@@ -457,158 +457,178 @@ static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1);
 
 static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_cols)
 {
-    if (!g_last_image_path) return;
-    
-    // 1. Chargement de l'image
+    if (!g_last_image_path) {
+        g_printerr("[Warn] Aucune image de detection disponible pour l'overlay.\n");
+        return;
+    }
     GError *err = NULL;
     GdkPixbuf *img = gdk_pixbuf_new_from_file(g_last_image_path, &err);
-    if (!img) { 
-        g_printerr("[Error] Impossible de charger l'image pour overlay: %s\n", err->message);
-        g_clear_error(&err); 
-        return; 
+    if (!img) {
+        g_printerr("[Warn] Impossible de charger l'image pour l'overlay (%s): %s\n", g_last_image_path, err->message);
+        g_clear_error(&err);
+        return;
     }
-    
-    // On travaille sur une copie pour ne pas altérer l'original en mémoire si besoin
     GdkPixbuf *disp = gdk_pixbuf_copy(img);
 
-    // 2. Définition de la zone de la grille (BBox Globale)
-    // On récupère les coordonnées globales de la grille détectée plus tôt
-    int gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
-    
+    char *root_dir = find_project_root();
+    GPtrArray *cell_positions = load_cell_positions(root_dir);
+
+    int x0=0, y0=0, x1=0, y1=0;
     if (g_grid_bbox_set) {
-        gx0 = g_grid_x0; 
-        gy0 = g_grid_y0; 
-        gx1 = g_grid_x1; 
-        gy1 = g_grid_y1;
-    } else {
-        // Fallback : Si pas de grille détectée, on prend toute l'image (peu probable)
-        gx0 = 0; gy0 = 0;
-        gx1 = gdk_pixbuf_get_width(img) - 1;
-        gy1 = gdk_pixbuf_get_height(img) - 1;
+        x0 = g_grid_x0; y0 = g_grid_y0; x1 = g_grid_x1; y1 = g_grid_y1;
+    } else if (!detect_grid_bbox(img, &x0, &y0, &x1, &y1)) {
+        x0 = 0; y0 = 0; x1 = gdk_pixbuf_get_width(img) - 1; y1 = gdk_pixbuf_get_height(img) - 1;
     }
-
-    // 3. Calcul de la "Grille Mathématique"
-    // C'est ici que tout se joue. On divise la zone globale par le nombre de cases.
-    double grid_width  = (double)(gx1 - gx0);
-    double grid_height = (double)(gy1 - gy0);
-
-    // Sécurité division par zéro
-    if (nb_cols < 1) nb_cols = 1;
-    if (nb_rows < 1) nb_rows = 1;
-
-    double cell_w = grid_width / (double)nb_cols;
-    double cell_h = grid_height / (double)nb_rows;
-
-    // --- PARAMETRES DE STYLE ---
-    // 0.80 = Le rectangle occupe 80% de la largeur de la case (laisse une marge)
-    // Augmentez à 0.90 si vous voulez que ça se touche presque.
-    const double BOX_SCALE = 0.80; 
-    const int LINE_WIDTH = 3; // Epaisseur du trait de contour
-
-    // On calcule la "demi-taille" de référence pour dessiner les boites
-    // On prend le min pour que les rectangles ne débordent pas si les cases sont rectangulaires
-    double half_size_ref = (cell_w < cell_h ? cell_w : cell_h) * 0.5 * BOX_SCALE;
-    
-    // Pour la longueur, on veut aller un peu plus loin pour bien englober la lettre
-    double half_long_ref = (cell_w > cell_h ? cell_w : cell_h) * 0.5 * 0.95; 
+    int W = x1 - x0 + 1;
+    int H = y1 - y0 + 1;
+    double stepX = (nb_cols > 0) ? (double)W / (double)nb_cols : 48.0;
+    double stepY = (nb_rows > 0) ? (double)H / (double)nb_rows : 48.0;
+    double insetX = stepX * 0.20;
+    double insetY = stepY * 0.20;
 
     for (guint i = 0; i < results->len; i++) {
         SolveResult *sr = g_ptr_array_index((GPtrArray *)results, i);
         if (!sr->found) continue;
 
+        int len = (sr->word) ? (int)strlen(sr->word) : 0;
+        int dc = (sr->c2 > sr->c1) ? 1 : (sr->c2 < sr->c1 ? -1 : 0);
+        int dr = (sr->r2 > sr->r1) ? 1 : (sr->r2 < sr->r1 ? -1 : 0);
+        if (len <= 0) {
+            len = abs(sr->c2 - sr->c1) + abs(sr->r2 - sr->r1) + 1;
+        }
+
         WordColor col = word_color_for_index((int)i);
 
-        // Coordonnées Logiques (Col, Row)
-        int c1 = sr->c1; int r1 = sr->r1;
-        int c2 = sr->c2; int r2 = sr->r2;
+        // --- NOUVEAU : Encadrement du mot entier (Rectangle Oriente) ---
 
-        // 4. Calcul des Centres Géométriques (Pixel)
-        // Le centre est : DébutGrille + (IndexColonne + 0.5) * LargeurCase
-        double cx_start = gx0 + ((double)c1 + 0.5) * cell_w;
-        double cy_start = gy0 + ((double)r1 + 0.5) * cell_h;
+        // 1. Trouver les coordonnees du DEBUT et de la FIN du mot
+        int c_start = sr->c1, r_start = sr->r1;
+        int c_end   = sr->c2, r_end   = sr->r2;
 
-        double cx_end   = gx0 + ((double)c2 + 0.5) * cell_w;
-        double cy_end   = gy0 + ((double)r2 + 0.5) * cell_h;
+        int sx0=0, sy0=0, sx1=0, sy1=0; // Start Cell Box
+        int ex0=0, ey0=0, ex1=0, ey1=0; // End Cell Box
 
-        // 5. Vecteurs de direction (pour l'orientation du rectangle)
-        double vx = cx_end - cx_start;
-        double vy = cy_end - cy_start;
-        double len = sqrt(vx*vx + vy*vy);
+        // Helper pour recuperer la boite d'une cellule (soit via CELLPOS, soit calcul approximatif)
+        // Inlined for C compatibility
+        
+        // START CELL
+        {
+             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_start, r_start) : NULL;
+             if (cb) {
+                 sx0 = cb->x0; sy0 = cb->y0; sx1 = cb->x1; sy1 = cb->y1;
+             } else {
+                 sx0 = x0 + (int)llround(c_start * stepX);
+                 sy0 = y0 + (int)llround(r_start * stepY);
+                 sx1 = x0 + (int)llround((c_start + 1) * stepX) - 1;
+                 sy1 = y0 + (int)llround((r_start + 1) * stepY) - 1;
+             }
+        }
 
-        // Gestion du cas mot d'une lettre (rare mais crash possible)
-        if (len < 0.1) { vx = 1.0; vy = 0.0; len = 1.0; }
+        // END CELL
+        {
+             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_end, r_end) : NULL;
+             if (cb) {
+                 ex0 = cb->x0; ey0 = cb->y0; ex1 = cb->x1; ey1 = cb->y1;
+             } else {
+                 ex0 = x0 + (int)llround(c_end * stepX);
+                 ey0 = y0 + (int)llround(r_end * stepY);
+                 ex1 = x0 + (int)llround((c_end + 1) * stepX) - 1;
+                 ey1 = y0 + (int)llround((r_end + 1) * stepY) - 1;
+             }
+        }
 
-        double ux = vx / len; // Vecteur Unitaire Direction
-        double uy = vy / len; 
-        double px = -uy;      // Vecteur Unitaire Perpendiculaire
+        // Centres des cellules de debut et fin
+        double start_cx = (sx0 + sx1) / 2.0;
+        double start_cy = (sy0 + sy1) / 2.0;
+        double end_cx   = (ex0 + ex1) / 2.0;
+        double end_cy   = (ey0 + ey1) / 2.0;
+
+        // Vecteur direction U (Start -> End)
+        double vx = end_cx - start_cx;
+        double vy = end_cy - start_cy;
+        double mag = sqrt(vx*vx + vy*vy);
+        
+        // Si le mot ne fait qu'une lettre, on définit une direction arbitraire (horizontale)
+        if (mag < 1.0) { vx = 1.0; vy = 0.0; mag = 1.0; }
+        
+        double ux = vx / mag;
+        double uy = vy / mag;
+
+        // Vecteur Perpendiculaire V (-uy, ux)
+        double px = -uy;
         double py = ux;
 
-        // 6. Définir les dimensions du rectangle
-        // "Rayon" longitudinal (dans le sens du mot)
-        // On rajoute la moitié d'une case au début et à la fin pour englober les lettres extrêmes
-        double rad_long = (len / 2.0) + half_long_ref;
+        // Demi-Largeur (perpendiculaire) et Demi-Longueur (extension)
+        // On se base sur la taille moyenne des cellules concernees
+        double cell_w_avg = ((sx1 - sx0 + 1) + (ex1 - ex0 + 1)) / 2.0;
+        double cell_h_avg = ((sy1 - sy0 + 1) + (ey1 - ey0 + 1)) / 2.0;
         
-        // "Rayon" latéral (épaisseur du mot)
-        double rad_wide = half_size_ref;
-
-        // Centre absolu du mot entier
-        double mid_x = (cx_start + cx_end) / 2.0;
-        double mid_y = (cy_start + cy_end) / 2.0;
-
-        // 7. Calcul des 4 sommets
-        // P1 ----- P3
-        //  |       |
-        // P2 ----- P4
+        // ADAPTIVE THICKNESS
+        double base_dim;
+        if (fabs(ux) > fabs(uy)) {      // Horizontal dominant -> width is LENGTH, so thickness depends on HEIGHT
+            base_dim = cell_h_avg;
+        } else if (fabs(uy) > fabs(ux)) { // Vertical dominant -> height is LENGTH, so thickness depends on WIDTH
+            base_dim = cell_w_avg;
+        } else {                          // Diagonal
+            base_dim = (cell_w_avg + cell_h_avg) / 2.0;
+        }
+        double half_thick = base_dim * 0.48; // 48% -> ~96% coverage of the cell dimension
         
-        int p1x = (int)(mid_x - ux * rad_long + px * rad_wide);
-        int p1y = (int)(mid_y - uy * rad_long + py * rad_wide);
-
-        int p3x = (int)(mid_x + ux * rad_long + px * rad_wide);
-        int p3y = (int)(mid_y + uy * rad_long + py * rad_wide);
-
-        int p4x = (int)(mid_x + ux * rad_long - px * rad_wide);
-        int p4y = (int)(mid_y + uy * rad_long - py * rad_wide);
+        // 4 Coins du rectangle oriente
+        // C1 = Start - ExtensionLargeur + Perpendiculaire
+        // C2 = Start - ExtensionLargeur - Perpendiculaire
+        // C3 = End   + ExtensionLargeur + Perpendiculaire
+        // C4 = End   + ExtensionLargeur - Perpendiculaire
         
-        int p2x = (int)(mid_x - ux * rad_long - px * rad_wide);
-        int p2y = (int)(mid_y - uy * rad_long - py * rad_wide);
+        // On recule un peu le debut et on avance un peu la fin pour bien englober
+        double ext = half_thick * 1.2; 
 
-        // 8. Dessin
-        draw_line(disp, p1x, p1y, p3x, p3y, LINE_WIDTH, col.r, col.g, col.b);
-        draw_line(disp, p3x, p3y, p4x, p4y, LINE_WIDTH, col.r, col.g, col.b);
-        draw_line(disp, p4x, p4y, p2x, p2y, LINE_WIDTH, col.r, col.g, col.b);
-        draw_line(disp, p2x, p2y, p1x, p1y, LINE_WIDTH, col.r, col.g, col.b);
+        int p1x = (int)(start_cx - ux * ext + px * half_thick);
+        int p1y = (int)(start_cy - uy * ext + py * half_thick);
+        
+        int p2x = (int)(start_cx - ux * ext - px * half_thick);
+        int p2y = (int)(start_cy - uy * ext - py * half_thick);
+
+        int p3x = (int)(end_cx + ux * ext + px * half_thick);
+        int p3y = (int)(end_cy + uy * ext + py * half_thick);
+
+        int p4x = (int)(end_cx + ux * ext - px * half_thick);
+        int p4y = (int)(end_cy + uy * ext - py * half_thick);
+        
+        // --- SMART REFINEMENT ---
+        // Adjust the box position based on actual ink centroid
+        refine_box_position(img, &p1x, &p1y, &p3x, &p3y, &p4x, &p4y, &p2x, &p2y);
+
+        // Dessin des 4 lignes
+        int th = 3; // Epaisseur du trait
+        draw_line(disp, p1x, p1y, p3x, p3y, th, col.r, col.g, col.b); // Haut
+        draw_line(disp, p3x, p3y, p4x, p4y, th, col.r, col.g, col.b); // Droite
+        draw_line(disp, p4x, p4y, p2x, p2y, th, col.r, col.g, col.b); // Bas
+        draw_line(disp, p2x, p2y, p1x, p1y, th, col.r, col.g, col.b); // Gauche
     }
 
-    // Affichage Fenêtre
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(win), "Solution (Grille Théorique)");
-    // On limite la taille par défaut pour éviter les fenêtres géantes
-    gtk_window_set_default_size(GTK_WINDOW(win), 
-                                MIN(gdk_pixbuf_get_width(disp), 1200), 
-                                MIN(gdk_pixbuf_get_height(disp), 900));
-    
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_window_set_title(GTK_WINDOW(win), "Solutions (overlay)");
+    gtk_window_set_default_size(GTK_WINDOW(win), gdk_pixbuf_get_width(disp), gdk_pixbuf_get_height(disp));
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_container_add(GTK_CONTAINER(win), box);
 
-    // Image dans un ScrolledWindow au cas où elle est très grande
-    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
-    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
-    
     GtkWidget *imgw = gtk_image_new_from_pixbuf(disp);
-    gtk_container_add(GTK_CONTAINER(scroll), imgw);
+    gtk_box_pack_start(GTK_BOX(box), imgw, TRUE, TRUE, 0);
 
     GtkWidget *btn_close = gtk_button_new_with_label("Fermer");
-    gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 5);
+    gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 4);
     g_signal_connect(btn_close, "clicked", G_CALLBACK(on_overlay_close), NULL);
 
     gtk_widget_show_all(win);
 
     g_object_unref(img);
     g_object_unref(disp);
-    // Note: on ne libère plus cell_positions ni root_dir ici car on ne les utilise plus
-    char *rd = find_project_root(); // Juste pour clean propre si besoin, sinon inutile
-    if(rd) g_free(rd);
+
+    if (cell_positions) g_ptr_array_free(cell_positions, TRUE);
+    g_free(root_dir);
 }
+
 static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
 {
     int W = gdk_pixbuf_get_width(img);
@@ -935,185 +955,179 @@ typedef struct
     double avg;
 } Segment;
 
-static void trim_zone(GdkPixbuf *pix, int *x0, int *x1, int *y0, int *y1, guint8 thr)
-{
-    int W = gdk_pixbuf_get_width(pix);
-    int H = gdk_pixbuf_get_height(pix);
-    int local_x0 = *x0, local_x1 = *x1, local_y0 = *y0, local_y1 = *y1;
-    int found_top = local_y0;
-    for (int y = local_y0; y <= local_y1; y++) {
-        int black_count = 0;
-        for (int x = local_x0; x <= local_x1; x++) {
-            if (get_gray_local(pix, x, y) < thr) black_count++;
-        }
-        if (black_count > (local_x1 - local_x0) * 0.02) {
-            found_top = y;
-            break;
-        }
-    }
-    
-    int found_bot = local_y1;
-    for (int y = local_y1; y >= found_top; y--) {
-        int black_count = 0;
-        for (int x = local_x0; x <= local_x1; x++) {
-            if (get_gray_local(pix, x, y) < thr) black_count++;
-        }
-        if (black_count > (local_x1 - local_x0) * 0.02) {
-            found_bot = y;
-            break;
-        }
-    }
-
-    int found_left = local_x0;
-    for (int x = local_x0; x <= local_x1; x++) {
-        int black_count = 0;
-        for (int y = found_top; y <= found_bot; y++) {
-            if (get_gray_local(pix, x, y) < thr) black_count++;
-        }
-        if (black_count > 2) { 
-            found_left = x;
-            break;
-        }
-    }
-
-    int found_right = local_x1;
-    for (int x = local_x1; x >= found_left; x--) {
-        int black_count = 0;
-        for (int y = found_top; y <= found_bot; y++) {
-            if (get_gray_local(pix, x, y) < thr) black_count++;
-        }
-        if (black_count > 2) {
-            found_right = x;
-            break;
-        }
-    }
-
-    if (found_left < found_right && found_top < found_bot) {
-        *x0 = found_left;
-        *x1 = found_right;
-        *y0 = found_top;
-        *y1 = found_bot;
-    }
-}
-
 static void find_zones(GdkPixbuf *pix,
-                       int *gx0, int *gx1, int *gy0, int *gy1,
-                       int *wx0, int *wx1, int *wy0, int *wy1)
+                       int *gx0,int *gx1,int *gy0,int *gy1,
+                       int *wx0,int *wx1,int *wy0,int *wy1)
 {
-    const guint8 thr = 160;
+    const guint8 thr = 180;
     int W = gdk_pixbuf_get_width(pix);
     int H = gdk_pixbuf_get_height(pix);
 
-    *gx0 = 0; *gx1 = W-1; *gy0 = 0; *gy1 = H-1;
-    *wx0 = 0; *wx1 = 0;   *wy0 = 0; *wy1 = 0;
-
-    if (W < 10 || H < 10) return;
-
-    double *proj_x = calloc(W, sizeof(double));
-    for (int x = 0; x < W; x++) {
-        int cnt = 0;
-        for (int y = 0; y < H; y++) {
-            if (get_gray_local(pix, x, y) < thr) cnt++;
-        }
-        proj_x[x] = (double)cnt / H;
-    }
-
-    int smooth_rad = 10; 
-    double *smooth_x = calloc(W, sizeof(double));
-    double glob_avg = 0;
-    for (int x = 0; x < W; x++) {
-        double sum = 0;
-        int c = 0;
-        for (int k = -smooth_rad; k <= smooth_rad; k++) {
-            if (x+k >= 0 && x+k < W) {
-                sum += proj_x[x+k];
-                c++;
-            }
-        }
-        smooth_x[x] = (c > 0) ? sum/c : 0;
-        glob_avg += smooth_x[x];
-    }
-    glob_avg /= W;
-    double threshold = glob_avg * 0.5; 
-    if (threshold < 0.02) threshold = 0.02;
-
-    typedef struct { int start, end; double score; } Block;
-    Block blocks[10]; 
-    int nb_blocks = 0;
-
-    int in_block = 0;
-    int start = 0;
-    double score_acc = 0;
-
-    for (int x = 0; x < W; x++) {
-        if (smooth_x[x] > threshold) {
-            if (!in_block) { in_block = 1; start = x; score_acc = smooth_x[x]; }
-            else { score_acc += smooth_x[x]; }
-        } else {
-            if (in_block) {
-                if (nb_blocks < 10 && (x - start) > W/20) {
-                    blocks[nb_blocks++] = (Block){start, x-1, score_acc};
-                }
-                in_block = 0;
-            }
-        }
-    }
-    if (in_block && nb_blocks < 10 && (W - start) > W/20) {
-        blocks[nb_blocks++] = (Block){start, W-1, score_acc};
-    }
-
-    free(proj_x);
-    free(smooth_x);
+    int gx0_local = 0, gx1_local = 0;
+    int gy0_local = 0, gy1_local = H - 1;
+    int wx0_local = 0, wx1_local = 0;
+    int word_idx = -1;
     int grid_idx = -1;
-    double max_score = -1.0;
 
-    for (int i = 0; i < nb_blocks; i++) {
-        if (blocks[i].score > max_score) {
-            max_score = blocks[i].score;
+    if (W <= 0 || H <= 0) { goto fallback_zones; }
+
+    double *dens = calloc((size_t)W, sizeof(double));
+    if (!dens) { goto fallback_zones; }
+    for (int x = 0; x < W; x++)
+    {
+        int black = 0;
+        for (int y = 0; y < H; y++)
+            if (get_gray_local(pix, x, y) < thr) black++;
+        dens[x] = (double)black / (double)H;
+    }
+
+    double *sm = calloc((size_t)W, sizeof(double));
+    if (!sm) { free(dens); goto fallback_zones; }
+
+    int rad = W / 80;
+    if (rad < 5) rad = 5;
+    if (rad > 20) rad = 20;
+
+    for (int x = 0; x < W; x++)
+    {
+        int L = clampi(x - rad, 0, W-1);
+        int R = clampi(x + rad, 0, W-1);
+        double acc = 0.0;
+        int cnt = 0;
+        for (int i = L; i <= R; i++) { acc += dens[i]; cnt++; }
+        sm[x] = (cnt > 0) ? acc / (double)cnt : 0.0;
+    }
+
+    double mean_s = 0.0;
+    for (int x = 0; x < W; x++) mean_s += sm[x];
+    mean_s /= (double)W;
+
+    if (mean_s < 1e-4) { free(dens); free(sm); goto fallback_zones; }
+
+    double Tseg = 0.15 * mean_s;
+    if (Tseg < 0.005) Tseg = 0.005;
+
+    int min_width = W / 40;
+    if (min_width < 6) min_width = 6;
+
+    Segment *seg = malloc(sizeof(Segment) * (size_t)W);
+    int nseg = 0;
+    int inside = 0;
+    int start = 0;
+    double sum = 0.0;
+    int cnt = 0;
+
+    for (int x = 0; x < W; x++)
+    {
+        if (sm[x] >= Tseg)
+        {
+            if (!inside) { inside = 1; start = x; sum = sm[x]; cnt = 1; }
+            else { sum += sm[x]; cnt++; }
+        }
+        else if (inside)
+        {
+            int end = x - 1;
+            int width = end - start + 1;
+            if (width >= min_width) { seg[nseg++] = (Segment){ start, end, sum / (double)cnt }; }
+            inside = 0;
+        }
+    }
+    if (inside)
+    {
+        int end = W - 1;
+        int width = end - start + 1;
+        if (width >= min_width) { seg[nseg++] = (Segment){ start, end, sum / (double)cnt }; }
+    }
+
+    if (nseg == 0) { free(dens); free(sm); free(seg); goto fallback_zones; }
+
+    double best_score_size = 0.0;
+
+    for (int i = 0; i < nseg; i++)
+    {
+        double current_score_size = seg[i].avg * (double)(seg[i].end - seg[i].start + 1);
+        if (current_score_size > best_score_size)
+        {
+            best_score_size = current_score_size;
             grid_idx = i;
         }
     }
 
-    if (grid_idx != -1) {
-        *gx0 = blocks[grid_idx].start;
-        *gx1 = blocks[grid_idx].end;
-        
-        int *proj_y = calloc(H, sizeof(int));
-        for (int y = 0; y < H; y++) {
-            for (int x = *gx0; x <= *gx1; x++) {
-                if (get_gray_local(pix, x, y) < thr) proj_y[y]++;
+    if (grid_idx >= 0)
+    {
+        gx0_local = seg[grid_idx].start;
+        gx1_local = seg[grid_idx].end;
+
+        double *row_dens = calloc((size_t)H, sizeof(double));
+        if (row_dens)
+        {
+            for (int y = 0; y < H; y++)
+            {
+                int black = 0;
+                for (int x = gx0_local; x <= gx1_local; x++)
+                    if (get_gray_local(pix, x, y) < thr) black++;
+                row_dens[y] = (double)black / (double)(gx1_local - gx0_local + 1);
             }
-        }
-        
-        int top = 0, bot = H-1;
-        while (top < H && proj_y[top] < (*gx1 - *gx0)*0.05) top++;
-        while (bot > 0 && proj_y[bot] < (*gx1 - *gx0)*0.05) bot--;
-        
-        if (top < bot) { *gy0 = top; *gy1 = bot; }
-        free(proj_y);
-        trim_zone(pix, gx0, gx1, gy0, gy1, thr);
 
-        int word_idx = -1;
-        max_score = -1.0;
-        for (int i = 0; i < nb_blocks; i++) {
-            if (i == grid_idx) continue;
-            if (blocks[i].start > *gx0 && blocks[i].end < *gx1) continue; 
-            
-            if (blocks[i].score > max_score) {
-                max_score = blocks[i].score;
-                word_idx = i;
-            }
-        }
+            double maxr = 0.0;
+            for (int y = 0; y < H; y++) if (row_dens[y] > maxr) maxr = row_dens[y];
 
-        if (word_idx != -1) {
-            *wx0 = blocks[word_idx].start;
-            *wx1 = blocks[word_idx].end;
-            *wy0 = 0; *wy1 = H-1;
-
+            double Ty = maxr * 0.35;
+            int top = 0, bot = H - 1;
+            while (top < H && row_dens[top] < Ty) top++;
+            while (bot >= 0 && row_dens[bot] < Ty) bot--;
+            if (top < bot) { gy0_local = top; gy1_local = bot; }
+            free(row_dens);
         }
-    } else {
-        *gx0 = W/4; *gx1 = 3*W/4; *gy0 = H/4; *gy1 = 3*H/4;
     }
+    else { goto fallback_zones; }
+
+    double best_word_score = 0.0;
+
+    for (int i = 0; i < nseg; i++)
+    {
+        if (i == grid_idx) continue;
+
+        int s0 = seg[i].start;
+        int s1 = seg[i].end;
+
+        if (!(s1 < gx0_local || s0 > gx1_local))
+            continue;
+
+        double score = seg[i].avg * (double)(s1 - s0 + 1);
+
+        if (score > best_word_score)
+        {
+            best_word_score = score;
+            word_idx = i;
+        }
+    }
+
+    if (word_idx >= 0)
+    {
+        wx0_local = seg[word_idx].start;
+        wx1_local = seg[word_idx].end;
+
+        if (wx0_local > gx1_local)
+            gx1_local = wx0_local - 1;
+    }
+
+    free(dens); free(sm); free(seg);
+
+    *gx0 = gx0_local;
+    *gx1 = gx1_local;
+    *gy0 = gy0_local;
+    *gy1 = gy1_local;
+
+    *wx0 = clampi(wx0_local, 0, W-1);
+    *wx1 = clampi(wx1_local, 0, W-1);
+    *wy0 = gy0_local;
+    *wy1 = gy1_local;
+    return;
+
+fallback_zones:
+    *gx0 = W/3; *gx1 = W-1; *gy0 = 0; *gy1 = H-1;
+    *wx0 = 0;   *wx1 = W/3; *wy0 = 0; *wy1 = H-1;
 }
 
 static void on_solve_clicked(GtkWidget *widget, gpointer user_data)
