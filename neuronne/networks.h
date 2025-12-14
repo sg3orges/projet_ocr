@@ -20,7 +20,7 @@
 #define NUM_INPUTS (IMAGE_WIDTH * IMAGE_HEIGHT)
 #define NUM_HIDDEN 64
 #define NUM_OUTPUTS 26
-#define NUM_TRAINING_SETS 26*4
+#define NUM_TRAINING_SETS 26*5
 
 // struct
 typedef struct {
