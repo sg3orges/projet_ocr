@@ -364,7 +364,6 @@ static const WordColor WORD_COLORS[] = {
     {120, 70, 0},
     {255, 200, 0},
     {0, 100, 0},
-    {0, 0, 0},
 };
 static const int WORD_COLORS_LEN = (int)(sizeof(WORD_COLORS) / sizeof(WORD_COLORS[0]));
 
