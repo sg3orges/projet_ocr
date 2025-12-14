@@ -106,7 +106,7 @@ void load_dataset(double inputs[NUM_TRAINING_SETS][NUM_INPUTS],
     int idx = 0;
     
     printf("Chargement des images...\n");
-    for (int version = 1; version <= 4; version++) {
+    for (int version = 1; version <= 5; version++) {
         for (char c = 'A'; c <= 'Z'; c++) {
             if (idx >= NUM_TRAINING_SETS) break;
             sprintf(filepath, "%s/%c%d.png", path, c, version);
