@@ -133,7 +133,7 @@ static int is_inside_quad(int x, int y, int p1x, int p1y, int p3x, int p3y, int 
     return 1;
 }
 
-static void refine_box_position(GdkPixbuf *pix, int *p1x, int *p1y, int *p3x, int *p3y, int *p4x, int *p4y, int *p2x, int *p2y)
+__attribute__((unused)) static void refine_box_position(GdkPixbuf *pix, int *p1x, int *p1y, int *p3x, int *p3y, int *p4x, int *p4y, int *p2x, int *p2y)
 {
     int min_x = *p1x, max_x = *p1x;
     int min_y = *p1y, max_y = *p1y;
@@ -199,7 +199,7 @@ static void refine_box_position(GdkPixbuf *pix, int *p1x, int *p1y, int *p3x, in
     }
 }
 
-static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
+__attribute__((unused)) static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
                                      int x0, int x1)
 {
     int W = gdk_pixbuf_get_width(pix);
@@ -257,7 +257,7 @@ static double autocorr_strength(const double *p, int n,
     return best;
 }
 
-static double periodicity_score(const double *p, int n)
+__attribute__((unused)) static double periodicity_score(const double *p, int n)
 {
     if (n < 8) return 0.0;
     int lag_min = 3;
@@ -297,7 +297,7 @@ static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
     g_free(pos_path);
 }
 
-static GPtrArray *load_cell_positions(const char *root_dir)
+__attribute__((unused)) static GPtrArray *load_cell_positions(const char *root_dir)
 {
     if (!root_dir) return NULL;
     char *pos_path = g_build_filename(root_dir, "CELLPOS", NULL);
@@ -327,7 +327,7 @@ static GPtrArray *load_cell_positions(const char *root_dir)
     return arr;
 }
 
-static CellBBox *lookup_cell_bbox(const GPtrArray *pos, int col, int row)
+__attribute__((unused)) static CellBBox *lookup_cell_bbox(const GPtrArray *pos, int col, int row)
 {
     if (!pos) return NULL;
     for (guint i = 0; i < pos->len; i++) {
@@ -591,7 +591,7 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     if(rd) g_free(rd);
 }
 
-static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
+__attribute__((unused)) static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);

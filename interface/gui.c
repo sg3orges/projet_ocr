@@ -64,11 +64,17 @@ static void on_image_clicked(GtkButton *button, gpointer user_data)
     gtk_container_set_border_width(GTK_CONTAINER(root), 12);
     gtk_container_add(GTK_CONTAINER(image_window), root);
 
-    // Applique le même fond bleu
-    GdkRGBA bg;
-    gdk_rgba_parse(&bg, "#1e88e5");
-    gtk_widget_override_background_color(image_window, GTK_STATE_FLAG_NORMAL, &bg);
-    gtk_widget_override_background_color(root, GTK_STATE_FLAG_NORMAL, &bg);
+    // Applique le même fond bleu avec CSS
+    GtkCssProvider *css_provider = gtk_css_provider_new();
+    const gchar *css_data = "window, box { background-color: #1e88e5; }";
+    gtk_css_provider_load_from_data(css_provider, css_data, -1, NULL);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(image_window),
+                                    GTK_STYLE_PROVIDER(css_provider),
+                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(root),
+                                    GTK_STYLE_PROVIDER(css_provider),
+                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(css_provider);
 
     gtk_widget_set_halign(root, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(root, GTK_ALIGN_CENTER);
@@ -150,10 +156,18 @@ void run_interface(int argc, char *argv[])
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_container_set_border_width(GTK_CONTAINER(box), 12);
     gtk_container_add(GTK_CONTAINER(window), box);
-    GdkRGBA bg;
-    gdk_rgba_parse(&bg, "#1e88e5");
-    gtk_widget_override_background_color(window, GTK_STATE_FLAG_NORMAL, &bg);
-    gtk_widget_override_background_color(box, GTK_STATE_FLAG_NORMAL, &bg);
+    
+    // Applique le fond bleu avec CSS
+    GtkCssProvider *css_provider = gtk_css_provider_new();
+    const gchar *css_data = "window, box { background-color: #1e88e5; }";
+    gtk_css_provider_load_from_data(css_provider, css_data, -1, NULL);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(window),
+                                    GTK_STYLE_PROVIDER(css_provider),
+                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(box),
+                                    GTK_STYLE_PROVIDER(css_provider),
+                                    GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(css_provider);
     gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
     gtk_widget_set_hexpand(box, TRUE);
