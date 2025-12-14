@@ -7,6 +7,8 @@
 #include <string.h>
 #include "detection.h"
 #include "networks.h"
+
+// Gestion des conflits de macro MAX avec solver.h / glib
 #ifdef MAX
 #undef MAX
 #endif
@@ -17,39 +19,15 @@ static int g_grid_x0 = 0, g_grid_y0 = 0, g_grid_x1 = 0, g_grid_y1 = 0;
 static int g_grid_bbox_set = 0;
 static GtkWidget *g_detect_window = NULL;
 
-// Clean up generated artifacts
-static void cleanup_generated_files(void)
-{
-    const char *paths[] = { "GRIDL", "GRIDWO", "CELLPOS", "cells", "letterinword", "images", NULL };
-    for (int i = 0; paths[i]; i++) {
-        char *cmd = g_strdup_printf("rm -rf %s", paths[i]);
-        g_spawn_command_line_async(cmd, NULL);
-        g_free(cmd);
-    }
-}
-
-// Re-open the detection window if it was hidden
-static void reopen_detect_window(void)
-{
-    if (g_detect_window && GTK_IS_WIDGET(g_detect_window)) {
-        gtk_widget_show_all(g_detect_window);
-        if (GTK_IS_WINDOW(g_detect_window))
-            gtk_window_present(GTK_WINDOW(g_detect_window));
-    }
-}
-
 static void on_detect_destroy(GtkWidget *widget, gpointer user_data)
 {
     (void)user_data;
     if (g_detect_window == widget) g_detect_window = NULL;
 }
 
-// Close overlay, clean files, and quit app
 static void on_overlay_close(GtkWidget *widget, gpointer user_data)
 {
     (void)widget; (void)user_data;
-    // We keep generated files (GRIDL/GRIDWO/CELLPOS/cells/letterinword/images)
-    // for debugging/inspection; no automatic cleanup here.
     g_print("[Info] Fermeture demandee par l'utilisateur. Arret du processus.\n");
     exit(0);
 }
@@ -59,12 +37,13 @@ typedef struct
     int col, row;
     int x0, y0, x1, y1;
 } CellBBox;
+
 void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             int gx0,int gx1,int gy0,int gy1,
                             guint8 black_thr, guint8 R,guint8 G,guint8 B);
 void detect_letters_in_words(GdkPixbuf *img, GdkPixbuf *disp,
-                            int wx0,int wx1,int wy0,int wy1,
-                            guint8 black_thr, guint8 R,guint8 G,guint8 B);
+                             int wx0,int wx1,int wy0,int wy1,
+                             guint8 black_thr, guint8 R,guint8 G,guint8 B);
 
 static inline int clampi(int v,int lo,int hi)
 {
@@ -79,7 +58,8 @@ static inline guint8 get_gray_local(GdkPixbuf *pix,int x,int y)
 }
 
 static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
-                      guint8 R,guint8 G,guint8 B){
+                      guint8 R,guint8 G,guint8 B)
+{
     int W=gdk_pixbuf_get_width(pix),H=gdk_pixbuf_get_height(pix);
     int n=gdk_pixbuf_get_n_channels(pix),rs=gdk_pixbuf_get_rowstride(pix);
     guchar *px=gdk_pixbuf_get_pixels(pix);
@@ -357,9 +337,6 @@ static CellBBox *lookup_cell_bbox(const GPtrArray *pos, int col, int row)
     return NULL;
 }
 
-// --------------------------------------------------
-// Cell scanning & neural prediction
-// --------------------------------------------------
 typedef struct
 {
     int col;
@@ -377,17 +354,17 @@ typedef struct
 typedef struct { guint8 r, g, b; } WordColor;
 
 static const WordColor WORD_COLORS[] = {
-    {255, 0, 0},     // red
-    {0, 140, 255},   // blue
-    {0, 180, 80},    // green
-    {255, 140, 0},   // orange
-    {170, 0, 255},   // purple
-    {0, 200, 200},   // cyan
-    {255, 0, 150},   // magenta
-    {120, 70, 0},    // brown
-    {255, 200, 0},   // yellow-ish
-    {0, 100, 0},     // dark green
-    {0, 0, 0},       // black fallback
+    {255, 0, 0},
+    {0, 140, 255},
+    {0, 180, 80},
+    {255, 140, 0},
+    {170, 0, 255},
+    {0, 200, 200},
+    {255, 0, 150},
+    {120, 70, 0},
+    {255, 200, 0},
+    {0, 100, 0},
+    {0, 0, 0},
 };
 static const int WORD_COLORS_LEN = (int)(sizeof(WORD_COLORS) / sizeof(WORD_COLORS[0]));
 
@@ -416,7 +393,7 @@ static char predict_letter_for_cell(NeuralNetwork *net, const char *filepath)
 {
     double conf = 0.0;
     char res = predict(net, filepath, &conf);
-    if (res >= 'a' && res <= 'z') res = res - 32; // uppercase
+    if (res >= 'a' && res <= 'z') res = res - 32;
     return res;
 }
 
@@ -430,7 +407,6 @@ static char *find_project_root(void)
         g_free(cells_path);
         if (ok) return cwd;
 
-        // climb one level up
         char *parent = g_path_get_dirname(cwd);
         if (!parent || g_strcmp0(parent, cwd) == 0) {
             g_free(parent);
@@ -446,7 +422,7 @@ static char *find_project_root(void)
 static void write_gridl_file(const char *root_dir, const GPtrArray *cells, int max_row, int max_col)
 {
     if (max_row <= 0 || max_col <= 0) return;
-    char *grid = g_malloc0((size_t)max_row * max_col);
+    char *grid = g_malloc0((size_t)max_row * (size_t)max_col);
     for (int i = 0; i < max_row * max_col; i++) grid[i] = '-';
 
     for (guint i = 0; i < cells->len; i++) {
@@ -454,12 +430,12 @@ static void write_gridl_file(const char *root_dir, const GPtrArray *cells, int m
         int r = cp->row - 1;
         int c = cp->col - 1;
         if (r >= 0 && r < max_row && c >= 0 && c < max_col)
-            grid[r * max_col + c] = cp->letter;
+            grid[(size_t)r * (size_t)max_col + (size_t)c] = cp->letter;
     }
 
     GString *out = g_string_new("");
     for (int r = 0; r < max_row; r++) {
-        g_string_append_len(out, grid + r * max_col, max_col);
+        g_string_append_len(out, grid + (size_t)r * (size_t)max_col, max_col);
         g_string_append_c(out, '\n');
     }
 
@@ -507,7 +483,6 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
     int H = y1 - y0 + 1;
     double stepX = (nb_cols > 0) ? (double)W / (double)nb_cols : 48.0;
     double stepY = (nb_rows > 0) ? (double)H / (double)nb_rows : 48.0;
-    // Draw a smaller box centered in each cell to avoid touching grid lines
     double insetX = stepX * 0.20;
     double insetY = stepY * 0.20;
 
@@ -662,16 +637,15 @@ static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
     int rs = gdk_pixbuf_get_rowstride(img);
     guchar *px = gdk_pixbuf_get_pixels(img);
 
-    // Histogram of dark pixels per column/row
-    double *col = g_malloc0(sizeof(double) * W);
-    double *row = g_malloc0(sizeof(double) * H);
+    double *col = g_malloc0(sizeof(double) * (size_t)W);
+    double *row = g_malloc0(sizeof(double) * (size_t)H);
 
     for (int y = 0; y < H; y++) {
         guchar *line = px + y * rs;
         for (int x = 0; x < W; x++) {
             guchar *p = line + x * n;
             int gray = (p[0] + p[1] + p[2]) / 3;
-            if (gray < 140) { // dark
+            if (gray < 140) {
                 col[x] += 1.0;
                 row[y] += 1.0;
             }
@@ -764,10 +738,11 @@ static int solve_words_in_grid(const char *root_dir,
     if (out_rows) *out_rows = 0;
     if (out_cols) *out_cols = 0;
     if (!root_dir) return 0;
+
     char *grid_path = g_build_filename(root_dir, "GRIDL", NULL);
     char *words_path = g_build_filename(root_dir, "GRIDWO", NULL);
 
-    char matrice[MAX][MAX];
+    char matrice[MAX_MAT][MAX_MAT]; // Updated to MAX_MAT
     int nbLignes = CreaMatrice(grid_path, matrice);
     if (nbLignes <= 0) {
         g_printerr("[Error] Lecture GRIDL echouee (%s)\n", grid_path);
@@ -775,7 +750,7 @@ static int solve_words_in_grid(const char *root_dir,
         g_free(words_path);
         return 0;
     }
-    int nbColonnes = strlen(matrice[0]);
+    int nbColonnes = (int)strlen(matrice[0]);
     if (out_rows) *out_rows = nbLignes;
     if (out_cols) *out_cols = nbColonnes;
 
@@ -811,6 +786,7 @@ static int solve_words_in_grid(const char *root_dir,
     fclose(fw);
     if (out_results) *out_results = results;
     else g_ptr_array_free(results, TRUE);
+
     g_free(grid_path);
     g_free(words_path);
     return 1;
@@ -818,14 +794,12 @@ static int solve_words_in_grid(const char *root_dir,
 
 static void run_solver_pipeline(void)
 {
-    // Trouve la racine du projet (dossier contenant "cells")
     char *root_dir = find_project_root();
     if (!root_dir) {
         g_printerr("[Error] Impossible de localiser le dossier 'cells'. Abandon.\n");
         return;
     }
 
-    // Initialise le reseau + SDL_image
     NeuralNetwork net;
     init_network(&net);
 
@@ -864,6 +838,7 @@ static void run_solver_pipeline(void)
                 cell_h = h;
             }
         }
+
         char letter = predict_letter_for_cell(&net, fullpath);
 
         CellPrediction *cp = g_malloc(sizeof(CellPrediction));
@@ -894,7 +869,6 @@ static void run_solver_pipeline(void)
 
     g_ptr_array_free(cells, TRUE);
 
-    // Traite les mots (letterInWord)
     char *words_dir = g_build_filename(root_dir, "letterInWord", NULL);
     GDir *words = g_dir_open(words_dir, 0, NULL);
     if (!words) {
@@ -962,7 +936,6 @@ static void run_solver_pipeline(void)
     }
     g_free(words_dir);
 
-    // Lance le solver sur GRIDL/GRIDWO et affiche l'overlay
     GPtrArray *results = NULL;
     int nb_rows = 0, nb_cols = 0;
     if (solve_words_in_grid(root_dir, &results, &nb_rows, &nb_cols)) {
@@ -998,7 +971,7 @@ static void find_zones(GdkPixbuf *pix,
 
     if (W <= 0 || H <= 0) { goto fallback_zones; }
 
-    double *dens = calloc(W, sizeof(double));
+    double *dens = calloc((size_t)W, sizeof(double));
     if (!dens) { goto fallback_zones; }
     for (int x = 0; x < W; x++)
     {
@@ -1008,11 +981,11 @@ static void find_zones(GdkPixbuf *pix,
         dens[x] = (double)black / (double)H;
     }
 
-    double *sm = calloc(W, sizeof(double));
+    double *sm = calloc((size_t)W, sizeof(double));
     if (!sm) { free(dens); goto fallback_zones; }
 
     int rad = W / 80;
-    if (rad < 5)   rad = 5;
+    if (rad < 5) rad = 5;
     if (rad > 20) rad = 20;
 
     for (int x = 0; x < W; x++)
@@ -1027,7 +1000,7 @@ static void find_zones(GdkPixbuf *pix,
 
     double mean_s = 0.0;
     for (int x = 0; x < W; x++) mean_s += sm[x];
-    mean_s /= W;
+    mean_s /= (double)W;
 
     if (mean_s < 1e-4) { free(dens); free(sm); goto fallback_zones; }
 
@@ -1037,7 +1010,7 @@ static void find_zones(GdkPixbuf *pix,
     int min_width = W / 40;
     if (min_width < 6) min_width = 6;
 
-    Segment *seg = malloc(sizeof(Segment) * W);
+    Segment *seg = malloc(sizeof(Segment) * (size_t)W);
     int nseg = 0;
     int inside = 0;
     int start = 0;
@@ -1073,7 +1046,6 @@ static void find_zones(GdkPixbuf *pix,
     for (int i = 0; i < nseg; i++)
     {
         double current_score_size = seg[i].avg * (double)(seg[i].end - seg[i].start + 1);
-
         if (current_score_size > best_score_size)
         {
             best_score_size = current_score_size;
@@ -1086,8 +1058,7 @@ static void find_zones(GdkPixbuf *pix,
         gx0_local = seg[grid_idx].start;
         gx1_local = seg[grid_idx].end;
 
-        // Detect the vertical span of the grid by scanning only inside the grid X band
-        double *row_dens = calloc(H, sizeof(double));
+        double *row_dens = calloc((size_t)H, sizeof(double));
         if (row_dens)
         {
             for (int y = 0; y < H; y++)
@@ -1138,12 +1109,7 @@ static void find_zones(GdkPixbuf *pix,
         wx1_local = seg[word_idx].end;
 
         if (wx0_local > gx1_local)
-        {
-             gx1_local = wx0_local - 1;
-        }
-    }
-    else
-    {
+            gx1_local = wx0_local - 1;
     }
 
     free(dens); free(sm); free(seg);
@@ -1162,7 +1128,6 @@ static void find_zones(GdkPixbuf *pix,
 fallback_zones:
     *gx0 = W/3; *gx1 = W-1; *gy0 = 0; *gy1 = H-1;
     *wx0 = 0;   *wx1 = W/3; *wy0 = 0; *wy1 = H-1;
-    return;
 }
 
 static void on_solve_clicked(GtkWidget *widget, gpointer user_data)
@@ -1171,15 +1136,14 @@ static void on_solve_clicked(GtkWidget *widget, gpointer user_data)
     (void)widget;
     g_print("[Info] Bouton Resoudre clique : generation de GRIDL via reseau de neurones...\n");
     run_solver_pipeline();
-    if (win) {
-        gtk_widget_hide(win); // garde l'app en vie
-    }
+    if (win) gtk_widget_hide(win);
 }
 
 static void run_detection(GtkWidget *win,const char *path)
 {
     g_detect_window = win;
     g_signal_connect(win, "destroy", G_CALLBACK(on_detect_destroy), NULL);
+
     if (g_last_image_path) {
         g_free(g_last_image_path);
         g_last_image_path = NULL;

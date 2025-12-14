@@ -1,7 +1,8 @@
 #include <gtk/gtk.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <stdlib.h>
-#include <math.h>
 #include <stdio.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <string.h>
@@ -15,6 +16,8 @@
 #define MAX_GRID_COLS 64
 #define MAX_GRID_ROWS 64
 
+typedef struct { int x, y; } Point;
+
 typedef struct
 {
     int min_x, max_x;
@@ -24,14 +27,78 @@ typedef struct
     gboolean looks_like_I;
 } LetterCand;
 
-typedef struct
+static inline int clampi(int v, int lo, int hi)
 {
-    gboolean used;
-    int min_x, max_x;
-    int min_y, max_y;
-} CellAgg;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
 
-typedef struct { int x, y; } Point;
+static int ensure_dir(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) == 0)
+        return S_ISDIR(st.st_mode) ? 0 : -1;
+    return mkdir(path, 0755);
+}
+
+static inline guint8 get_gray(GdkPixbuf *pix, int x, int y)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+
+    x = clampi(x, 0, W - 1);
+    y = clampi(y, 0, H - 1);
+
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
+
+    return (guint8)((p[0] + p[1] + p[2]) / 3);
+}
+
+static void put_rgb(GdkPixbuf *pix, int x, int y, guint8 R, guint8 G, guint8 B)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
+    p[0] = R; p[1] = G; p[2] = B;
+}
+
+static void draw_rect_thick(GdkPixbuf *pix, int x0, int y0, int x1, int y1,
+                            guint8 R, guint8 G, guint8 B, int thick)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+
+    x0 = clampi(x0, 0, W - 1);
+    x1 = clampi(x1, 0, W - 1);
+    y0 = clampi(y0, 0, H - 1);
+    y1 = clampi(y1, 0, H - 1);
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+
+    for (int t = 0; t < thick; ++t)
+    {
+        int cx0 = clampi(x0 + t, 0, W - 1);
+        int cx1 = clampi(x1 - t, 0, W - 1);
+        int cy0 = clampi(y0 + t, 0, H - 1);
+        int cy1 = clampi(y1 - t, 0, H - 1);
+
+        for (int x = cx0; x <= cx1; ++x)
+        {
+            put_rgb(pix, x, cy0, R, G, B);
+            put_rgb(pix, x, cy1, R, G, B);
+        }
+        for (int y = cy0; y <= cy1; ++y)
+        {
+            put_rgb(pix, cx0, y, R, G, B);
+            put_rgb(pix, cx1, y, R, G, B);
+        }
+    }
+}
 
 static int parse_cell_filename(const char *name, int *col, int *row, int *idx)
 {
@@ -57,11 +124,7 @@ static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
         }
 
     DIR *d = opendir(dirpath);
-    if (!d)
-    {
-        perror("opendir cleanup");
-        return;
-    }
+    if (!d) return;
 
     struct dirent *de;
     while ((de = readdir(d)) != NULL)
@@ -84,11 +147,7 @@ static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
     closedir(d);
 
     d = opendir(dirpath);
-    if (!d)
-    {
-        perror("opendir cleanup pass2");
-        return;
-    }
+    if (!d) return;
 
     while ((de = readdir(d)) != NULL)
     {
@@ -103,183 +162,37 @@ static void cleanup_cells_dir(const char *dirpath, int max_cols, int max_rows)
 
         if (col < 1 || col > max_cols || row < 1 || row > max_rows)
         {
-            unlink(fullpath);
+            (void)unlink(fullpath);
             continue;
         }
 
-        if (best_idx[col][row] < 0 ||
-            strcmp(de->d_name, best_name[col][row]) != 0)
+        if (best_idx[col][row] < 0 || strcmp(de->d_name, best_name[col][row]) != 0)
         {
-            unlink(fullpath);
+            (void)unlink(fullpath);
             continue;
         }
     }
 
     closedir(d);
-}
-
-static int parse_name(const char *s, int *col, int *row, int *idx)
-{
-    int c, r, i;
-    if (sscanf(s, "%d_%d_%d.png", &c, &r, &i) == 3)
-    {
-        *col = c; *row = r; *idx = i;
-        return 1;
-    }
-    return 0;
-}
-
-static int copy_file(const char *src, const char *dst)
-{
-    FILE *fs = fopen(src, "rb");
-    if (!fs) return -1;
-    FILE *fd = fopen(dst, "wb");
-    if (!fd) { fclose(fs); return -1; }
-
-    char buf[8192];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), fs)) > 0)
-        fwrite(buf, 1, n, fd);
-
-    fclose(fs);
-    fclose(fd);
-    return 0;
-}
-
-static void finalize_cells(const char *tmp_dir, const char *out_dir,
-                           int max_cols, int max_rows)
-{
-    int best_idx[65][65];
-    char best_name[65][65][256];
-
-    for (int c = 0; c < 65; ++c)
-        for (int r = 0; r < 65; ++r)
-        {
-            best_idx[c][r] = -1;
-            best_name[c][r][0] = '\0';
-        }
-
-    DIR *d = opendir(tmp_dir);
-    if (!d) return;
-
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL)
-    {
-        if (de->d_name[0] == '.') continue;
-
-        int col, row, idx;
-        if (!parse_name(de->d_name, &col, &row, &idx))
-            continue;
-
-        if (col < 1 || col > max_cols) continue;
-        if (row < 1 || row > max_rows) continue;
-
-        if (idx > best_idx[col][row])
-        {
-            best_idx[col][row] = idx;
-            snprintf(best_name[col][row], sizeof(best_name[col][row]),
-                     "%s", de->d_name);
-        }
-    }
-    closedir(d);
-
-    for (int col = 1; col <= max_cols; ++col)
-    {
-        for (int row = 1; row <= max_rows; ++row)
-        {
-            if (best_idx[col][row] < 0) continue;
-
-            char src[512], dst[512];
-            snprintf(src, sizeof(src), "%s/%s", tmp_dir, best_name[col][row]);
-            snprintf(dst, sizeof(dst), "%s/%s", out_dir, best_name[col][row]);
-
-            copy_file(src, dst);
-        }
-    }
-}
-
-static inline int clampi(int v, int lo, int hi)
-{
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
-static inline guint8 get_gray(GdkPixbuf *pix, int x, int y)
-{
-    int W = gdk_pixbuf_get_width(pix);
-    int H = gdk_pixbuf_get_height(pix);
-
-    x = clampi(x, 0, W - 1);
-    y = clampi(y, 0, H - 1);
-
-    int n  = gdk_pixbuf_get_n_channels(pix);
-    int rs = gdk_pixbuf_get_rowstride(pix);
-    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
-
-    return (p[0] + p[1] + p[2]) / 3;
-}
-
-static void put_rgb(GdkPixbuf *pix, int x, int y,
-                    guint8 R, guint8 G, guint8 B)
-{
-    int W = gdk_pixbuf_get_width(pix);
-    int H = gdk_pixbuf_get_height(pix);
-    if (x < 0 || y < 0 || x >= W || y >= H)
-        return;
-    int n  = gdk_pixbuf_get_n_channels(pix);
-    int rs = gdk_pixbuf_get_rowstride(pix);
-    guchar *p = gdk_pixbuf_get_pixels(pix) + y * rs + x * n;
-    p[0] = R; p[1] = G; p[2] = B;
-}
-
-static void draw_rect_thick(GdkPixbuf *pix, int x0, int y0, int x1, int y1,
-                            guint8 R, guint8 G, guint8 B, int thick)
-{
-    for (int t = 0; t < thick; ++t)
-    {
-        int cx0 = clampi(x0 + t, 0, gdk_pixbuf_get_width(pix) - 1);
-        int cx1 = clampi(x1 - t, 0, gdk_pixbuf_get_width(pix) - 1);
-        int cy0 = clampi(y0 + t, 0, gdk_pixbuf_get_height(pix) - 1);
-        int cy1 = clampi(y1 - t, 0, gdk_pixbuf_get_height(pix) - 1);
-
-        for (int x = cx0; x <= cx1; ++x)
-        {
-            put_rgb(pix, x, cy0, R, G, B);
-            put_rgb(pix, x, cy1, R, G, B);
-        }
-        for (int y = cy0; y <= cy1; ++y)
-        {
-            put_rgb(pix, cx0, y, R, G, B);
-            put_rgb(pix, cx1, y, R, G, B);
-        }
-    }
-}
-
-static int ensure_dir(const char *path)
-{
-    struct stat st;
-    if (stat(path, &st) == 0)
-        return S_ISDIR(st.st_mode) ? 0 : -1;
-    return mkdir(path, 0755);
 }
 
 static inline gboolean is_black_pixel(GdkPixbuf *img, int x, int y, guint8 thr)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
-    if (x < 0 || x >= W || y < 0 || y >= H)
-        return FALSE;
+    if (x < 0 || x >= W || y < 0 || y >= H) return FALSE;
     return get_gray(img, x, y) < thr;
 }
 
 static void flood_fill_component(GdkPixbuf *img, guint8 thr, int sx, int sy,
                                  int *min_x, int *max_x,
                                  int *min_y, int *max_y,
-                                 gboolean **visited,
-                                 int W, int H)
+                                 gboolean **visited, int W, int H)
 {
-    Point *stack = g_malloc(W * H * sizeof(Point));
-    int top = 0;
+    Point *stack = g_malloc((gsize)W * (gsize)H * sizeof(Point));
+    if (!stack) return;
 
+    int top = 0;
     stack[top++] = (Point){ sx, sy };
     visited[sy][sx] = TRUE;
 
@@ -315,12 +228,156 @@ static void flood_fill_component(GdkPixbuf *img, guint8 thr, int sx, int sy,
     g_free(stack);
 }
 
+static void binarize_pixbuf(GdkPixbuf *pix, guint8 thr)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix);
+
+    for (int y = 0; y < H; ++y)
+    {
+        guchar *row = p + y * rs;
+        for (int x = 0; x < W; ++x)
+        {
+            guchar *px = row + x * n;
+            guint8 g = (guint8)((px[0] + px[1] + px[2]) / 3);
+            guint8 v = (g < thr) ? 0 : 255;
+            px[0] = px[1] = px[2] = v;
+        }
+    }
+}
+
+static void despeckle_by_neighbors(GdkPixbuf *pix, int min_black_neighbors)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    guchar *src = gdk_pixbuf_get_pixels(pix);
+
+    gsize sz = (gsize)rs * (gsize)H;
+    guchar *tmp = (guchar*)g_malloc(sz);
+    if (!tmp) return;
+    memcpy(tmp, src, (size_t)sz);
+
+    for (int y = 1; y < H - 1; ++y)
+    {
+        for (int x = 1; x < W - 1; ++x)
+        {
+            guchar *p = tmp + y * rs + x * n;
+            if (p[0] != 0) continue;
+
+            int nb = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    guchar *q = tmp + (y + dy) * rs + (x + dx) * n;
+                    if (q[0] == 0) nb++;
+                }
+            }
+
+            if (nb < min_black_neighbors)
+            {
+                guchar *d = src + y * rs + x * n;
+                d[0] = d[1] = d[2] = 255;
+            }
+        }
+    }
+
+    g_free(tmp);
+}
+
+static void remove_small_components_binary(GdkPixbuf *pix, int min_area)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    int n  = gdk_pixbuf_get_n_channels(pix);
+    guchar *p = gdk_pixbuf_get_pixels(pix);
+
+    guint8 *vis = (guint8*)g_malloc0((gsize)W * (gsize)H);
+    if (!vis) return;
+
+    Point *q = (Point*)g_malloc((gsize)W * (gsize)H * sizeof(Point));
+    if (!q) { g_free(vis); return; }
+
+    for (int y0 = 0; y0 < H; ++y0)
+    {
+        for (int x0 = 0; x0 < W; ++x0)
+        {
+            size_t idx0 = (size_t)y0 * (size_t)W + (size_t)x0;
+            if (vis[idx0]) continue;
+
+            guchar *px0 = p + y0 * rs + x0 * n;
+            if (px0[0] != 0) { vis[idx0] = 1; continue; }
+
+            int head = 0, tail = 0;
+            q[tail++] = (Point){x0, y0};
+            vis[idx0] = 1;
+
+            int area = 0;
+            while (head < tail)
+            {
+                Point cur = q[head++];
+                area++;
+
+                static const int dx[4] = { -1, 1, 0, 0 };
+                static const int dy[4] = { 0, 0, -1, 1 };
+
+                for (int k = 0; k < 4; ++k)
+                {
+                    int nx = cur.x + dx[k];
+                    int ny = cur.y + dy[k];
+                    if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+
+                    size_t idn = (size_t)ny * (size_t)W + (size_t)nx;
+                    if (vis[idn]) continue;
+
+                    guchar *pxn = p + ny * rs + nx * n;
+                    if (pxn[0] == 0)
+                    {
+                        vis[idn] = 1;
+                        q[tail++] = (Point){nx, ny};
+                    }
+                    else
+                    {
+                        vis[idn] = 1;
+                    }
+                }
+            }
+
+            if (area < min_area)
+            {
+                for (int i = 0; i < tail; ++i)
+                {
+                    int x = q[i].x, y = q[i].y;
+                    guchar *px = p + y * rs + x * n;
+                    px[0] = px[1] = px[2] = 255;
+                }
+            }
+        }
+    }
+
+    g_free(q);
+    g_free(vis);
+}
+
+static void clean_letter_pixbuf(GdkPixbuf *pix)
+{
+    binarize_pixbuf(pix, 180);
+    despeckle_by_neighbors(pix, 2);
+    remove_small_components_binary(pix, 6);
+    despeckle_by_neighbors(pix, 2);
+}
+
 static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
-                              int min_x, int min_y,
-                              int max_x, int max_y,
+                              int min_x, int min_y, int max_x, int max_y,
                               guint8 R, guint8 G, guint8 B,
-                              int col_idx, int row_idx,
-                              int letter_idx,
+                              int col_idx, int row_idx, int letter_idx,
                               int margin)
 {
     int W = gdk_pixbuf_get_width(img);
@@ -333,41 +390,32 @@ static int save_letter_simple(GdkPixbuf *img, GdkPixbuf *disp,
 
     int w = x1 - x0 + 1;
     int h = y1 - y0 + 1;
-    if (w <= 0 || h <= 0)
-        return letter_idx;
+    if (w <= 0 || h <= 0) return letter_idx;
 
     draw_rect_thick(disp, x0, y0, x1, y1, R, G, B, 1);
 
     GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, x0, y0, w, h);
-    if (!sub)
-        return letter_idx;
+    if (!sub) return letter_idx;
 
-    GdkPixbuf *scaled = gdk_pixbuf_scale_simple(
-        sub, LETTER_TARGET_W, LETTER_TARGET_H, GDK_INTERP_BILINEAR);
-
-    if (scaled)
-    {
-        char path[512];
-        snprintf(path, sizeof(path),
-                 "cells/%03d_%03d_%04d.png",
-                 col_idx, row_idx, letter_idx);
-
-        gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
-        g_object_unref(scaled);
-        letter_idx++;
-    }
-
+    GdkPixbuf *scaled = gdk_pixbuf_scale_simple(sub, LETTER_TARGET_W, LETTER_TARGET_H, GDK_INTERP_BILINEAR);
     g_object_unref(sub);
-    return letter_idx;
+    if (!scaled) return letter_idx;
+
+    clean_letter_pixbuf(scaled);
+
+    char path[512];
+    snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png", col_idx, row_idx, letter_idx);
+    (void)gdk_pixbuf_save(scaled, path, "png", NULL, NULL);
+
+    g_object_unref(scaled);
+    return letter_idx + 1;
 }
 
 static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
-                                   int min_x, int min_y,
-                                   int max_x, int max_y,
-                                   guint8 R, guint8 G, guint8 B,
-                                   int col_idx, int row_idx,
-                                   int letter_idx,
-                                   int margin)
+                                  int min_x, int min_y, int max_x, int max_y,
+                                  guint8 R, guint8 G, guint8 B,
+                                  int col_idx, int row_idx, int letter_idx,
+                                  int margin)
 {
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
@@ -379,25 +427,15 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
 
     int src_w = x1 - x0 + 1;
     int src_h = y1 - y0 + 1;
-    if (src_w <= 0 || src_h <= 0)
-        return letter_idx;
+    if (src_w <= 0 || src_h <= 0) return letter_idx;
 
     draw_rect_thick(disp, x0, y0, x1, y1, R, G, B, 1);
 
     GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(img, x0, y0, src_w, src_h);
-    if (!sub)
-        return letter_idx;
+    if (!sub) return letter_idx;
 
-    GdkPixbuf *out = gdk_pixbuf_new(GDK_COLORSPACE_RGB,
-                                    FALSE,
-                                    8,
-                                    LETTER_TARGET_W,
-                                    LETTER_TARGET_H);
-    if (!out)
-    {
-        g_object_unref(sub);
-        return letter_idx;
-    }
+    GdkPixbuf *out = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, LETTER_TARGET_W, LETTER_TARGET_H);
+    if (!out) { g_object_unref(sub); return letter_idx; }
 
     int out_rs = gdk_pixbuf_get_rowstride(out);
     int out_n  = gdk_pixbuf_get_n_channels(out);
@@ -416,61 +454,88 @@ static int save_letter_normalized(GdkPixbuf *img, GdkPixbuf *disp,
     double sx = (double)LETTER_TARGET_W  / (double)src_w;
     double sy = (double)LETTER_TARGET_H / (double)src_h;
 
-    gdk_pixbuf_scale(sub, out,
-                     0, 0,
-                     LETTER_TARGET_W,
-                     LETTER_TARGET_H,
-                     0.0, 0.0,
-                     sx, sy,
-                     GDK_INTERP_BILINEAR);
+    gdk_pixbuf_scale(sub, out, 0, 0, LETTER_TARGET_W, LETTER_TARGET_H,
+                     0.0, 0.0, sx, sy, GDK_INTERP_BILINEAR);
+    g_object_unref(sub);
+
+    clean_letter_pixbuf(out);
 
     int rs  = gdk_pixbuf_get_rowstride(out);
     int nch = gdk_pixbuf_get_n_channels(out);
     guchar *pix = gdk_pixbuf_get_pixels(out);
 
-    const guint8 THR = 180;
-    for (int y = 0; y < LETTER_TARGET_H; ++y)
-    {
-        guchar *row = pix + y * rs;
-        for (int x = 0; x < LETTER_TARGET_W; ++x)
-        {
-            guchar *p = row + x * nch;
-            guint8 g = (p[0] + p[1] + p[2]) / 3;
-            guint8 v = (g < THR) ? 0 : 255;
-            p[0] = p[1] = p[2] = v;
-        }
-    }
     int black = 0;
     for (int y = 0; y < LETTER_TARGET_H; ++y)
     {
         guchar *row = pix + y * rs;
         for (int x = 0; x < LETTER_TARGET_W; ++x)
         {
-            guchar *p = row + x * nch;
-            if (p[0] == 0) black++;
+            guchar *pp = row + x * nch;
+            if (pp[0] == 0) black++;
         }
     }
 
     double ratio = (double)black / (double)(LETTER_TARGET_W * LETTER_TARGET_H);
-
-    if (ratio < 0.01 || ratio > 0.60)
+    if (ratio < 0.01 || ratio > 0.75)
     {
         g_object_unref(out);
-        g_object_unref(sub);
         return letter_idx;
     }
 
     char path[512];
-    snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png",
-         col_idx, row_idx, letter_idx);
-
-    gdk_pixbuf_save(out, path, "png", NULL, NULL);
+    snprintf(path, sizeof(path), "cells/%03d_%03d_%04d.png", col_idx, row_idx, letter_idx);
+    (void)gdk_pixbuf_save(out, path, "png", NULL, NULL);
 
     g_object_unref(out);
-    g_object_unref(sub);
+    return letter_idx + 1;
+}
 
-    letter_idx++;
-    return letter_idx;
+static int extract_line_centers(const gboolean *line, int a, int b, int *out_centers, int max_out)
+{
+    int n = 0;
+    int in_run = 0, run_start = 0;
+
+    for (int i = a; i <= b; ++i)
+    {
+        if (line[i] && !in_run) { in_run = 1; run_start = i; }
+        else if (!line[i] && in_run)
+        {
+            int run_end = i - 1;
+            if (n < max_out) out_centers[n++] = (run_start + run_end) / 2;
+            in_run = 0;
+        }
+    }
+    if (in_run)
+    {
+        int run_end = b;
+        if (n < max_out) out_centers[n++] = (run_start + run_end) / 2;
+    }
+    return n;
+}
+
+static int count_centers_before(const int *centers, int n, int v)
+{
+    int c = 0;
+    for (int i = 0; i < n; ++i) if (centers[i] <= v) c++;
+    return c;
+}
+
+static int cmp_cy(const void *a, const void *b)
+{
+    const LetterCand *A = (const LetterCand*)a;
+    const LetterCand *B = (const LetterCand*)b;
+    int cyA = (A->min_y + A->max_y) / 2;
+    int cyB = (B->min_y + B->max_y) / 2;
+    return (cyA > cyB) - (cyA < cyB);
+}
+
+static int cmp_cx(const void *a, const void *b)
+{
+    const LetterCand *A = (const LetterCand*)a;
+    const LetterCand *B = (const LetterCand*)b;
+    int cxA = (A->min_x + A->max_x) / 2;
+    int cxB = (B->min_x + B->max_x) / 2;
+    return (cxA > cxB) - (cxA < cxB);
 }
 
 static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
@@ -478,8 +543,7 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
                                    guint8 R, guint8 G, guint8 B,
                                    int *out_nb_cells)
 {
-    if (out_nb_cells)
-        *out_nb_cells = 0;
+    if (out_nb_cells) *out_nb_cells = 0;
 
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
@@ -489,11 +553,17 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
 
     int grid_w = gx1 - gx0 + 1;
     int grid_h = gy1 - gy0 + 1;
+    if (grid_w <= 0 || grid_h <= 0) return 0;
 
-    int *col_sum  = g_malloc0(grid_w * sizeof(int));
-    int *row_sum  = g_malloc0(grid_h * sizeof(int));
-    gboolean *is_vline = g_malloc0(W * sizeof(gboolean));
-    gboolean *is_hline = g_malloc0(H * sizeof(gboolean));
+    int *col_sum  = g_malloc0((gsize)grid_w * sizeof(int));
+    int *row_sum  = g_malloc0((gsize)grid_h * sizeof(int));
+    gboolean *is_vline = g_malloc0((gsize)W * sizeof(gboolean));
+    gboolean *is_hline = g_malloc0((gsize)H * sizeof(gboolean));
+    if (!col_sum || !row_sum || !is_vline || !is_hline)
+    {
+        g_free(col_sum); g_free(row_sum); g_free(is_vline); g_free(is_hline);
+        return 0;
+    }
 
     int max_col_sum = 0;
     for (int x = gx0; x <= gx1; ++x)
@@ -501,8 +571,7 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
         int idx = x - gx0;
         int cnt = 0;
         for (int y = gy0; y <= gy1; ++y)
-            if (get_gray(img, x, y) < GRID_THR)
-                cnt++;
+            if (get_gray(img, x, y) < GRID_THR) cnt++;
         col_sum[idx] = cnt;
         if (cnt > max_col_sum) max_col_sum = cnt;
     }
@@ -513,8 +582,7 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
         int idx = y - gy0;
         int cnt = 0;
         for (int x = gx0; x <= gx1; ++x)
-            if (get_gray(img, x, y) < GRID_THR)
-                cnt++;
+            if (get_gray(img, x, y) < GRID_THR) cnt++;
         row_sum[idx] = cnt;
         if (cnt > max_row_sum) max_row_sum = cnt;
     }
@@ -532,68 +600,31 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
     for (int x = gx0; x <= gx1; ++x)
     {
         int idx = x - gx0;
-        if (col_sum[idx] >= col_thr)
-            is_vline[x] = TRUE;
+        if (col_sum[idx] >= col_thr) is_vline[x] = TRUE;
     }
     for (int y = gy0; y <= gy1; ++y)
     {
         int idx = y - gy0;
-        if (row_sum[idx] >= row_thr)
-            is_hline[y] = TRUE;
+        if (row_sum[idx] >= row_thr) is_hline[y] = TRUE;
     }
 
     g_free(col_sum);
     g_free(row_sum);
 
-    int max_lines_x = gx1 - gx0 + 4;
-    int max_lines_y = gy1 - gy0 + 4;
+    int max_lines_x = gx1 - gx0 + 8;
+    int max_lines_y = gy1 - gy0 + 8;
 
-    int *vx = g_malloc0(max_lines_x * sizeof(int));
-    int *vy = g_malloc0(max_lines_y * sizeof(int));
-    int nv = 0, nh = 0;
-
-    int in_run = 0, run_start = 0;
-
-    for (int x = gx0; x <= gx1; ++x)
+    int *vx = g_malloc0((gsize)max_lines_x * sizeof(int));
+    int *vy = g_malloc0((gsize)max_lines_y * sizeof(int));
+    if (!vx || !vy)
     {
-        if (is_vline[x] && !in_run)
-        {
-            in_run = 1;
-            run_start = x;
-        }
-        else if (!is_vline[x] && in_run)
-        {
-            int run_end = x - 1;
-            vx[nv++] = (run_start + run_end) / 2;
-            in_run = 0;
-        }
-    }
-    if (in_run)
-    {
-        int run_end = gx1;
-        vx[nv++] = (run_start + run_end) / 2;
+        g_free(vx); g_free(vy);
+        g_free(is_vline); g_free(is_hline);
+        return 0;
     }
 
-    in_run = 0;
-    for (int y = gy0; y <= gy1; ++y)
-    {
-        if (is_hline[y] && !in_run)
-        {
-            in_run = 1;
-            run_start = y;
-        }
-        else if (!is_hline[y] && in_run)
-        {
-            int run_end = y - 1;
-            vy[nh++] = (run_start + run_end) / 2;
-            in_run = 0;
-        }
-    }
-    if (in_run)
-    {
-        int run_end = gy1;
-        vy[nh++] = (run_start + run_end) / 2;
-    }
+    int nv = extract_line_centers(is_vline, gx0, gx1, vx, max_lines_x);
+    int nh = extract_line_centers(is_hline, gy0, gy1, vy, max_lines_y);
 
     g_free(is_vline);
     g_free(is_hline);
@@ -605,8 +636,7 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
     }
 
     int nb_cells = (nv - 1) * (nh - 1);
-    if (out_nb_cells)
-        *out_nb_cells = nb_cells;
+    if (out_nb_cells) *out_nb_cells = nb_cells;
 
     const int MIN_PIXELS_IN_CELL = 25;
     const int CELL_INNER_MARGIN  = 4;
@@ -650,84 +680,24 @@ static int detect_letters_by_cells(GdkPixbuf *img, GdkPixbuf *disp,
                 }
             }
 
-            if (dark_count < MIN_PIXELS_IN_CELL)
-                continue;
-            if (min_x > max_x || min_y > max_y)
-                continue;
+            if (dark_count < MIN_PIXELS_IN_CELL) continue;
+            if (min_x > max_x || min_y > max_y) continue;
 
             int col_idx = c + 1;
             int row_idx = r + 1;
 
             letter_idx = save_letter_simple(img, disp,
-                                min_x, min_y, max_x, max_y,
-                                R, G, B,
-                                col_idx, row_idx,
-                                letter_idx,
-                                3);
+                                            min_x, min_y, max_x, max_y,
+                                            R, G, B,
+                                            col_idx, row_idx,
+                                            letter_idx,
+                                            3);
         }
     }
 
     g_free(vx);
     g_free(vy);
-
     return letter_idx;
-}
-
-static int extract_line_centers(const gboolean *line, int a, int b,
-                                int *out_centers, int max_out)
-{
-    int n = 0;
-    int in_run = 0, run_start = 0;
-
-    for (int i = a; i <= b; ++i)
-    {
-        if (line[i] && !in_run)
-        {
-            in_run = 1;
-            run_start = i;
-        }
-        else if (!line[i] && in_run)
-        {
-            int run_end = i - 1;
-            if (n < max_out)
-                out_centers[n++] = (run_start + run_end) / 2;
-            in_run = 0;
-        }
-    }
-    if (in_run)
-    {
-        int run_end = b;
-        if (n < max_out)
-            out_centers[n++] = (run_start + run_end) / 2;
-    }
-    return n;
-}
-
-static int count_centers_before(const int *centers, int n, int v)
-{
-    int c = 0;
-    for (int i = 0; i < n; ++i)
-        if (centers[i] <= v)
-            c++;
-    return c;
-}
-
-static int cmp_cy(const void *a, const void *b)
-{
-    const LetterCand *A = (const LetterCand*)a;
-    const LetterCand *B = (const LetterCand*)b;
-    int cyA = (A->min_y + A->max_y) / 2;
-    int cyB = (B->min_y + B->max_y) / 2;
-    return (cyA > cyB) - (cyA < cyB);
-}
-
-static int cmp_cx(const void *a, const void *b)
-{
-    const LetterCand *A = (const LetterCand*)a;
-    const LetterCand *B = (const LetterCand*)b;
-    int cxA = (A->min_x + A->max_x) / 2;
-    int cxB = (B->min_x + B->max_x) / 2;
-    return (cxA > cxB) - (cxA < cxB);
 }
 
 static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
@@ -746,32 +716,37 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     const int    MAX_DIM_FACTOR  = 20;
     const int    MIN_STRONG_AREA = 50;
 
-    const int    MAX_AREA_ABS    = 1500;
-    const int    MAX_W_ABS       = 80;
-    const int    MAX_H_ABS       = 80;
+    const int    MAX_AREA_ABS    = 2500;
+    const int    MAX_W_ABS       = 120;
+    const int    MAX_H_ABS       = 120;
 
     const guint8 GRID_BLACK_THR   = 100;
     const guint8 LETTER_BLACK_THR = 160;
 
     int grid_w = gx1 - gx0 + 1;
     int grid_h = gy1 - gy0 + 1;
+    if (grid_w <= 0 || grid_h <= 0) return;
 
     GdkPixbuf *work = gdk_pixbuf_copy(img);
-    if (!work)
-        return;
+    if (!work) return;
 
-    int      *col_sum  = g_malloc0(grid_w * sizeof(int));
-    int      *row_sum  = g_malloc0(grid_h * sizeof(int));
-    gboolean *is_vline = g_malloc0(W * sizeof(gboolean));
-    gboolean *is_hline = g_malloc0(H * sizeof(gboolean));
+    int      *col_sum  = g_malloc0((gsize)grid_w * sizeof(int));
+    int      *row_sum  = g_malloc0((gsize)grid_h * sizeof(int));
+    gboolean *is_vline = g_malloc0((gsize)W * sizeof(gboolean));
+    gboolean *is_hline = g_malloc0((gsize)H * sizeof(gboolean));
+    if (!col_sum || !row_sum || !is_vline || !is_hline)
+    {
+        g_free(col_sum); g_free(row_sum); g_free(is_vline); g_free(is_hline);
+        g_object_unref(work);
+        return;
+    }
 
     for (int x = gx0; x <= gx1; ++x)
     {
         int idx_x = x - gx0;
         int cnt = 0;
         for (int y = gy0; y <= gy1; ++y)
-            if (get_gray(img, x, y) < GRID_BLACK_THR)
-                cnt++;
+            if (get_gray(img, x, y) < GRID_BLACK_THR) cnt++;
         col_sum[idx_x] = cnt;
     }
 
@@ -780,33 +755,30 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
         int idx_y = y - gy0;
         int cnt = 0;
         for (int x = gx0; x <= gx1; ++x)
-            if (get_gray(img, x, y) < GRID_BLACK_THR)
-                cnt++;
+            if (get_gray(img, x, y) < GRID_BLACK_THR) cnt++;
         row_sum[idx_y] = cnt;
     }
 
-    double COL_DENSITY_THR = 0.7;
-    double ROW_DENSITY_THR = 0.7;
+    double COL_DENSITY_THR = 0.70;
+    double ROW_DENSITY_THR = 0.70;
 
     for (int x = gx0; x <= gx1; ++x)
     {
         int idx_x = x - gx0;
-        if (col_sum[idx_x] >= (int)(COL_DENSITY_THR * grid_h))
+        if (col_sum[idx_x] >= (int)(COL_DENSITY_THR * (double)grid_h))
         {
             is_vline[x] = TRUE;
-            for (int y = gy0; y <= gy1; ++y)
-                put_rgb(work, x, y, 255, 255, 255);
+            for (int y = gy0; y <= gy1; ++y) put_rgb(work, x, y, 255, 255, 255);
         }
     }
 
     for (int y = gy0; y <= gy1; ++y)
     {
         int idx_y = y - gy0;
-        if (row_sum[idx_y] >= (int)(ROW_DENSITY_THR * grid_w))
+        if (row_sum[idx_y] >= (int)(ROW_DENSITY_THR * (double)grid_w))
         {
             is_hline[y] = TRUE;
-            for (int x = gx0; x <= gx1; ++x)
-                put_rgb(work, x, y, 255, 255, 255);
+            for (int x = gx0; x <= gx1; ++x) put_rgb(work, x, y, 255, 255, 255);
         }
     }
 
@@ -817,11 +789,24 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     int nv = extract_line_centers(is_vline, gx0, gx1, vx, 512);
     int nh = extract_line_centers(is_hline, gy0, gy1, vy, 512);
 
-    gboolean **visited = g_malloc(H * sizeof(gboolean *));
+    gboolean **visited = g_malloc((gsize)H * sizeof(gboolean *));
+    if (!visited)
+    {
+        g_free(is_vline); g_free(is_hline);
+        g_object_unref(work);
+        return;
+    }
     for (int y = 0; y < H; ++y)
     {
-        visited[y] = g_malloc(W * sizeof(gboolean));
-        memset(visited[y], 0, W * sizeof(gboolean));
+        visited[y] = g_malloc0((gsize)W * sizeof(gboolean));
+        if (!visited[y])
+        {
+            for (int yy = 0; yy < y; ++yy) g_free(visited[yy]);
+            g_free(visited);
+            g_free(is_vline); g_free(is_hline);
+            g_object_unref(work);
+            return;
+        }
     }
 
     GArray *cands = g_array_new(FALSE, FALSE, sizeof(LetterCand));
@@ -830,39 +815,35 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
     {
         for (int x = gx0; x <= gx1; ++x)
         {
-            if (!is_black_pixel(work, x, y, LETTER_BLACK_THR) || visited[y][x])
-                continue;
+            if (!is_black_pixel(work, x, y, LETTER_BLACK_THR) || visited[y][x]) continue;
 
-            int min_x, max_x, min_y, max_y;
-            flood_fill_component(work, LETTER_BLACK_THR, x, y,
-                                 &min_x, &max_x, &min_y, &max_y,
-                                 visited, W, H);
+            int min_x = x, max_x = x, min_y = y, max_y = y;
 
-            int width  = max_x - min_x + 1;
-            int height = max_y - min_y + 1;
-            int area   = width * height;
+flood_fill_component(work, LETTER_BLACK_THR, x, y,
+                     &min_x, &max_x, &min_y, &max_y,
+                     visited, W, H);
+
+
+if (min_x > max_x || min_y > max_y)
+    continue;
+
+int width  = max_x - min_x + 1;
+int height = max_y - min_y + 1;
+int area   = width * height;
+
 
             if (width <= 6 && height <= 6 && area <= 40) continue;
-            if (width >= 30 || height >= 30) continue;
-
             if (area < MIN_AREA) continue;
             if (area > MAX_AREA_ABS) continue;
-            if (width > MAX_W_ABS) continue;
-            if (height > MAX_H_ABS) continue;
+            if (width > MAX_W_ABS || height > MAX_H_ABS) continue;
 
             gboolean looks_like_I = (height >= MIN_HEIGHT_I && width <= MAX_WIDTH_I);
-
             if (area < MIN_STRONG_AREA && !looks_like_I) continue;
-
             if (!looks_like_I && (width < MIN_WIDTH || height < MIN_HEIGHT)) continue;
-
             if (width > W / MAX_DIM_FACTOR || height > H / MAX_DIM_FACTOR) continue;
 
-            if (width <= 4 && height <= 4 && !looks_like_I) continue;
-
             double aspect = (double)width / (double)height;
-            if (!looks_like_I && (aspect > ASPECT_MAX || aspect < 1.0 / ASPECT_MAX))
-                continue;
+            if (!looks_like_I && (aspect > ASPECT_MAX || aspect < 1.0 / ASPECT_MAX)) continue;
 
             gboolean touches_grid = FALSE;
             for (int xx = min_x; xx <= max_x && !touches_grid; ++xx)
@@ -872,16 +853,14 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
                 if (yy >= 0 && yy < H && is_hline[yy]) touches_grid = TRUE;
 
             if (looks_like_I && touches_grid) continue;
-            if (touches_grid && (width < 10 || height < 10 || area < 100) && !looks_like_I)
-                continue;
+            if (touches_grid && (width < 10 || height < 10 || area < 100) && !looks_like_I) continue;
 
-            LetterCand lc = {0};
+            LetterCand lc;
+            memset(&lc, 0, sizeof(lc));
             lc.min_x = min_x; lc.max_x = max_x;
             lc.min_y = min_y; lc.max_y = max_y;
             lc.width = width; lc.height = height; lc.area = area;
             lc.looks_like_I = looks_like_I;
-            lc.row_idx = 0;
-            lc.col_idx = 0;
 
             int cx = (min_x + max_x) / 2;
             int cy = (min_y + max_y) / 2;
@@ -891,13 +870,17 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
                 lc.col_idx = count_centers_before(vx, nv, cx);
                 lc.row_idx = count_centers_before(vy, nh, cy);
             }
+            else
+            {
+                lc.col_idx = 0;
+                lc.row_idx = 0;
+            }
 
             g_array_append_val(cands, lc);
         }
     }
 
-    for (int y = 0; y < H; ++y)
-        g_free(visited[y]);
+    for (int y = 0; y < H; ++y) g_free(visited[y]);
     g_free(visited);
 
     int letter_idx = 0;
@@ -907,14 +890,9 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
         g_array_sort(cands, cmp_cy);
 
         int n = (int)cands->len;
-        int *heights = g_malloc0(n * sizeof(int));
-        for (int i = 0; i < n; ++i)
-            heights[i] = g_array_index(cands, LetterCand, i).height;
-
         long sumh = 0;
-        for (int i = 0; i < n; ++i) sumh += heights[i];
+        for (int i = 0; i < n; ++i) sumh += g_array_index(cands, LetterCand, i).height;
         double avg_h = (n > 0) ? (double)sumh / (double)n : 20.0;
-        g_free(heights);
 
         int row = 1;
         int start = 0;
@@ -932,18 +910,18 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
             {
                 LetterCand cur = g_array_index(cands, LetterCand, end);
                 int cy = (cur.min_y + cur.max_y) / 2;
-                if (abs(cy - ref_cy) <= tol)
-                    end++;
-                else
-                    break;
+                if (abs(cy - ref_cy) <= tol) end++;
+                else break;
             }
 
             int len = end - start;
-            LetterCand *linebuf = g_malloc(len * sizeof(LetterCand));
+            LetterCand *linebuf = g_malloc((gsize)len * sizeof(LetterCand));
+            if (!linebuf) break;
+
             for (int i = 0; i < len; ++i)
                 linebuf[i] = g_array_index(cands, LetterCand, start + i);
 
-            qsort(linebuf, len, sizeof(LetterCand), cmp_cx);
+            qsort(linebuf, (size_t)len, sizeof(LetterCand), cmp_cx);
 
             for (int i = 0; i < len; ++i)
             {
@@ -958,7 +936,6 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
             }
 
             g_free(linebuf);
-
             row++;
             start = end;
         }
@@ -968,9 +945,7 @@ static void detect_letters_legacy(GdkPixbuf *img, GdkPixbuf *disp,
         for (guint i = 0; i < cands->len; ++i)
         {
             LetterCand lc = g_array_index(cands, LetterCand, i);
-
-            if (lc.col_idx <= 0 || lc.row_idx <= 0)
-                continue;
+            if (lc.col_idx <= 0 || lc.row_idx <= 0) continue;
 
             letter_idx = save_letter_normalized(img, disp,
                                                 lc.min_x, lc.min_y,
@@ -994,7 +969,9 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             guint8 R, guint8 G, guint8 B)
 {
     (void)black_thr;
-
+    (void)R; 
+    (void)G; 
+    (void)B;
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
 
@@ -1006,14 +983,11 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     if (gx0 > gx1) { int t = gx0; gx0 = gx1; gx1 = t; }
     if (gy0 > gy1) { int t = gy0; gy0 = gy1; gy1 = t; }
 
-    if (gx1 - gx0 < 5 || gy1 - gy0 < 5)
-        return;
+    if (gx1 - gx0 < 5 || gy1 - gy0 < 5) return;
 
-    ensure_dir("cells");
+    (void)ensure_dir("cells");
 
-    int used_legacy = 0;
-
-    int nb_cells   = 0;
+    int nb_cells = 0;
     int nb_letters = detect_letters_by_cells(img, disp,
                                              gx0, gx1, gy0, gy1,
                                              R, G, B,
@@ -1022,23 +996,13 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
     if (nb_letters > 0 && nb_cells > 0)
     {
         double ratio = (double)nb_letters / (double)nb_cells;
-
         if (ratio > 0.5 && ratio < 1.5)
-        {
             return;
-        }
     }
-
-    used_legacy = 1;
 
     gdk_pixbuf_copy_area(img, 0, 0, W, H, disp, 0, 0);
 
-    detect_letters_legacy(img, disp,
-                          gx0, gx1, gy0, gy1,
-                          R, G, B);
+    detect_letters_legacy(img, disp, gx0, gx1, gy0, gy1, R, G, B);
 
-    if (used_legacy)
-    {
-        cleanup_cells_dir("cells", 14, 14);
-    }
+    cleanup_cells_dir("cells", 14, 14);
 }
