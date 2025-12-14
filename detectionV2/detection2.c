@@ -80,6 +80,195 @@ static void draw_rect(GdkPixbuf *pix,int x0,int y0,int x1,int y1,
     }
 }
 
+static void draw_line(GdkPixbuf *pix, int x0, int y0, int x1, int y1, int thickness, guint8 r, guint8 g, guint8 b)
+{
+    int w = gdk_pixbuf_get_width(pix);
+    int h = gdk_pixbuf_get_height(pix);
+    int n_channels = gdk_pixbuf_get_n_channels(pix);
+    int rowstride = gdk_pixbuf_get_rowstride(pix);
+    guchar *pixels = gdk_pixbuf_get_pixels(pix);
+
+    int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy, e2;
+
+    for (;;) {
+        for (int ty = y0 - thickness / 2; ty <= y0 + thickness / 2; ty++) {
+            for (int tx = x0 - thickness / 2; tx <= x0 + thickness / 2; tx++) {
+                if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
+                    guchar *p = pixels + ty * rowstride + tx * n_channels;
+                    p[0] = r;
+                    p[1] = g;
+                    p[2] = b;
+                }
+            }
+        }
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+// Check if point P(x,y) is inside rectangle defined by corners p1, p2, p4 (p3 is opposite p1)
+// Order from main: p1(TL), p3(TR), p4(BR), p2(BL) - wait, let's look at generation order:
+// p1(TL), p2(BL), p3(TR), p4(BR) ? 
+// In generation: 
+// p1 = Start - ext + perp  (Top Left relative to direction)
+// p3 = End + ext + perp    (Top Right)
+// p4 = End + ext - perp    (Bottom Right)
+// p2 = Start - ext - perp  (Bottom Left)
+// So order 1 -> 3 -> 4 -> 2 is cyclic.
+static int is_inside_quad(int x, int y, int p1x, int p1y, int p3x, int p3y, int p4x, int p4y, int p2x, int p2y)
+{
+    // Simple cross product check for convex quad
+    // Edge 1-3
+    if ((p3x - p1x)*(y - p1y) - (p3y - p1y)*(x - p1x) < 0) return 0;
+    // Edge 3-4
+    if ((p4x - p3x)*(y - p3y) - (p4y - p3y)*(x - p3x) < 0) return 0;
+    // Edge 4-2
+    if ((p2x - p4x)*(y - p4y) - (p2y - p4y)*(x - p4x) < 0) return 0;
+    // Edge 2-1
+    if ((p1x - p2x)*(y - p2y) - (p1y - p2y)*(x - p2x) < 0) return 0;
+    return 1;
+}
+
+static void refine_box_position(GdkPixbuf *pix, int *p1x, int *p1y, int *p3x, int *p3y, int *p4x, int *p4y, int *p2x, int *p2y)
+{
+    int min_x = *p1x, max_x = *p1x;
+    int min_y = *p1y, max_y = *p1y;
+    int pts_x[] = {*p3x, *p4x, *p2x};
+    int pts_y[] = {*p3y, *p4y, *p2y};
+
+    for(int i=0; i<3; i++) {
+        if(pts_x[i] < min_x) min_x = pts_x[i];
+        if(pts_x[i] > max_x) max_x = pts_x[i];
+        if(pts_y[i] < min_y) min_y = pts_y[i];
+        if(pts_y[i] > max_y) max_y = pts_y[i];
+    }
+    
+    // Clamp to image
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    min_x = (min_x < 0) ? 0 : min_x;
+    max_x = (max_x >= W) ? W-1 : max_x;
+    min_y = (min_y < 0) ? 0 : min_y;
+    max_y = (max_y >= H) ? H-1 : max_y;
+
+    long long sum_x = 0, sum_y = 0;
+    int count = 0;
+    int n_chan = gdk_pixbuf_get_n_channels(pix);
+    int rs = gdk_pixbuf_get_rowstride(pix);
+    guchar *pixels = gdk_pixbuf_get_pixels(pix);
+
+    for (int y = min_y; y <= max_y; y++) {
+        for (int x = min_x; x <= max_x; x++) {
+            // fast check bounds roughly? No, use accurate.
+            if (is_inside_quad(x, y, *p1x, *p1y, *p3x, *p3y, *p4x, *p4y, *p2x, *p2y)) {
+                guchar *p = pixels + y * rs + x * n_chan;
+                int gray = (p[0] + p[1] + p[2]) / 3;
+                if (gray < 160) { // Dark pixel (ink)
+                    sum_x += x;
+                    sum_y += y;
+                    count++;
+                }
+            }
+        }
+    }
+
+    if (count > 20) { // Only if we found enough ink
+        double center_x = (double)sum_x / count;
+        double center_y = (double)sum_y / count;
+        
+        // Theoretical center
+        double th_cx = (*p1x + *p4x) / 2.0; 
+        double th_cy = (*p1y + *p4y) / 2.0; // Diagonals midpoint
+
+        double dx = center_x - th_cx;
+        double dy = center_y - th_cy;
+        
+        // Clamp shift to avoid jumping too far (e.g. max 50% of the box size)
+        // Hardcoded clamp for safety: +/- 15 pixels is usually enough for alignment jitter
+        if(dx > 20) dx = 20; if(dx < -20) dx = -20;
+        if(dy > 20) dy = 20; if(dy < -20) dy = -20;
+
+        *p1x += (int)dx; *p1y += (int)dy;
+        *p2x += (int)dx; *p2y += (int)dy;
+        *p3x += (int)dx; *p3y += (int)dy;
+        *p4x += (int)dx; *p4y += (int)dy;
+    }
+}
+
+static double *col_black_ratio_zone(GdkPixbuf *pix, guint8 thr,
+                                     int x0, int x1)
+{
+    int W = gdk_pixbuf_get_width(pix);
+    int H = gdk_pixbuf_get_height(pix);
+    x0 = clampi(x0, 0, W-1);
+    x1 = clampi(x1, 0, W-1);
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+
+    int n = x1 - x0 + 1;
+    double *r = calloc(n, sizeof(double));
+    if (!r) return NULL;
+
+    for (int i = 0; i < n; i++)
+    {
+        int x = x0 + i;
+        int black = 0;
+        for (int y = 0; y < H; y++)
+            if (get_gray_local(pix, x, y) < thr)
+                black++;
+        r[i] = (double)black / (double)H;
+    }
+    return r;
+}
+
+static double autocorr_strength(const double *p, int n,
+                                 int lag_min, int lag_max)
+{
+    if (n <= 0) return 0.0;
+    if (lag_max >= n) lag_max = n-1;
+    if (lag_min >= lag_max) return 0.0;
+
+    double mean = 0.0; for (int i = 0; i < n; i++) mean += p[i]; mean /= (double)n;
+    double var = 0.0;
+    for (int i = 0; i < n; i++) { double d = p[i] - mean; var += d*d; }
+    if (var <= 1e-12) return 0.0;
+
+    double best = 0.0;
+    for (int k = lag_min; k <= lag_max; k++)
+    {
+        double acc = 0.0;
+        int cnt = 0;
+        for (int i = 0; i + k < n; i++)
+        {
+            double a = p[i] - mean;
+            double b = p[i+k] - mean;
+            acc += a*b; cnt++;
+        }
+        if (cnt > 0)
+        {
+            double score = acc / (var * cnt);
+            if (score > best) best = score;
+        }
+    }
+    if (best < 0.0) best = 0.0;
+    return best;
+}
+
+static double periodicity_score(const double *p, int n)
+{
+    if (n < 8) return 0.0;
+    int lag_min = 3;
+    int lag_max = n / 4;
+    if (lag_max <= lag_min) return 0.0;
+    return autocorr_strength(p, n, lag_min, lag_max);
+}
+
+// --------------------------------------------------
+// Cell position persistence
+// --------------------------------------------------
 static void write_cell_positions(const char *root_dir, int nb_rows, int nb_cols)
 {
     if (!root_dir || !g_grid_bbox_set || nb_rows <= 0 || nb_cols <= 0) return;
@@ -310,30 +499,112 @@ static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_co
 
         WordColor col = word_color_for_index((int)i);
 
-        for (int k = 0; k < len; k++) {
-            int c = sr->c1 + dc * k;
-            int r = sr->r1 + dr * k;
-            int rx0, ry0, rx1, ry1;
+        // --- NOUVEAU : Encadrement du mot entier (Rectangle Oriente) ---
 
-            CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c, r) : NULL;
-            if (cb) {
-                int w = cb->x1 - cb->x0 + 1;
-                int h = cb->y1 - cb->y0 + 1;
-                int inset_px_x = (int)llround(w * 0.08);
-                int inset_px_y = (int)llround(h * 0.08);
-                rx0 = clampi(cb->x0 + inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
-                ry0 = clampi(cb->y0 + inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
-                rx1 = clampi(cb->x1 - inset_px_x, 0, gdk_pixbuf_get_width(disp) - 1);
-                ry1 = clampi(cb->y1 - inset_px_y, 0, gdk_pixbuf_get_height(disp) - 1);
-            } else {
-                rx0 = x0 + (int)llround(c * stepX + insetX);
-                ry0 = y0 + (int)llround(r * stepY + insetY);
-                rx1 = x0 + (int)llround((c + 1) * stepX - insetX) - 1;
-                ry1 = y0 + (int)llround((r + 1) * stepY - insetY) - 1;
-            }
+        // 1. Trouver les coordonnees du DEBUT et de la FIN du mot
+        int c_start = sr->c1, r_start = sr->r1;
+        int c_end   = sr->c2, r_end   = sr->r2;
 
-            draw_rect(disp, rx0, ry0, rx1, ry1, col.r, col.g, col.b);
+        int sx0=0, sy0=0, sx1=0, sy1=0; // Start Cell Box
+        int ex0=0, ey0=0, ex1=0, ey1=0; // End Cell Box
+
+        // Helper pour recuperer la boite d'une cellule (soit via CELLPOS, soit calcul approximatif)
+        // Inlined for C compatibility
+        
+        // START CELL
+        {
+             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_start, r_start) : NULL;
+             if (cb) {
+                 sx0 = cb->x0; sy0 = cb->y0; sx1 = cb->x1; sy1 = cb->y1;
+             } else {
+                 sx0 = x0 + (int)llround(c_start * stepX);
+                 sy0 = y0 + (int)llround(r_start * stepY);
+                 sx1 = x0 + (int)llround((c_start + 1) * stepX) - 1;
+                 sy1 = y0 + (int)llround((r_start + 1) * stepY) - 1;
+             }
         }
+
+        // END CELL
+        {
+             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_end, r_end) : NULL;
+             if (cb) {
+                 ex0 = cb->x0; ey0 = cb->y0; ex1 = cb->x1; ey1 = cb->y1;
+             } else {
+                 ex0 = x0 + (int)llround(c_end * stepX);
+                 ey0 = y0 + (int)llround(r_end * stepY);
+                 ex1 = x0 + (int)llround((c_end + 1) * stepX) - 1;
+                 ey1 = y0 + (int)llround((r_end + 1) * stepY) - 1;
+             }
+        }
+
+        // Centres des cellules de debut et fin
+        double start_cx = (sx0 + sx1) / 2.0;
+        double start_cy = (sy0 + sy1) / 2.0;
+        double end_cx   = (ex0 + ex1) / 2.0;
+        double end_cy   = (ey0 + ey1) / 2.0;
+
+        // Vecteur direction U (Start -> End)
+        double vx = end_cx - start_cx;
+        double vy = end_cy - start_cy;
+        double mag = sqrt(vx*vx + vy*vy);
+        
+        // Si le mot ne fait qu'une lettre, on définit une direction arbitraire (horizontale)
+        if (mag < 1.0) { vx = 1.0; vy = 0.0; mag = 1.0; }
+        
+        double ux = vx / mag;
+        double uy = vy / mag;
+
+        // Vecteur Perpendiculaire V (-uy, ux)
+        double px = -uy;
+        double py = ux;
+
+        // Demi-Largeur (perpendiculaire) et Demi-Longueur (extension)
+        // On se base sur la taille moyenne des cellules concernees
+        double cell_w_avg = ((sx1 - sx0 + 1) + (ex1 - ex0 + 1)) / 2.0;
+        double cell_h_avg = ((sy1 - sy0 + 1) + (ey1 - ey0 + 1)) / 2.0;
+        
+        // ADAPTIVE THICKNESS
+        double base_dim;
+        if (fabs(ux) > fabs(uy)) {      // Horizontal dominant -> width is LENGTH, so thickness depends on HEIGHT
+            base_dim = cell_h_avg;
+        } else if (fabs(uy) > fabs(ux)) { // Vertical dominant -> height is LENGTH, so thickness depends on WIDTH
+            base_dim = cell_w_avg;
+        } else {                          // Diagonal
+            base_dim = (cell_w_avg + cell_h_avg) / 2.0;
+        }
+        double half_thick = base_dim * 0.48; // 48% -> ~96% coverage of the cell dimension
+        
+        // 4 Coins du rectangle oriente
+        // C1 = Start - ExtensionLargeur + Perpendiculaire
+        // C2 = Start - ExtensionLargeur - Perpendiculaire
+        // C3 = End   + ExtensionLargeur + Perpendiculaire
+        // C4 = End   + ExtensionLargeur - Perpendiculaire
+        
+        // On recule un peu le debut et on avance un peu la fin pour bien englober
+        double ext = half_thick * 1.2; 
+
+        int p1x = (int)(start_cx - ux * ext + px * half_thick);
+        int p1y = (int)(start_cy - uy * ext + py * half_thick);
+        
+        int p2x = (int)(start_cx - ux * ext - px * half_thick);
+        int p2y = (int)(start_cy - uy * ext - py * half_thick);
+
+        int p3x = (int)(end_cx + ux * ext + px * half_thick);
+        int p3y = (int)(end_cy + uy * ext + py * half_thick);
+
+        int p4x = (int)(end_cx + ux * ext - px * half_thick);
+        int p4y = (int)(end_cy + uy * ext - py * half_thick);
+        
+        // --- SMART REFINEMENT ---
+        // Adjust the box position based on actual ink centroid
+        refine_box_position(img, &p1x, &p1y, &p3x, &p3y, &p4x, &p4y, &p2x, &p2y);
+
+        // Dessin des 4 lignes
+        int th = 3; // Epaisseur du trait
+        draw_line(disp, p1x, p1y, p3x, p3y, th, col.r, col.g, col.b); // Haut
+        draw_line(disp, p3x, p3y, p4x, p4y, th, col.r, col.g, col.b); // Droite
+        draw_line(disp, p4x, p4y, p2x, p2y, th, col.r, col.g, col.b); // Bas
+        draw_line(disp, p2x, p2y, p1x, p1y, th, col.r, col.g, col.b); // Gauche
     }
 
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -381,24 +652,82 @@ static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
         }
     }
 
-    double maxc = 0.0, maxr = 0.0;
+    // 1. HORIZONTAL SEGMENTATION (Find the widest block of dense columns)
+    double maxc = 0.0;
     for (int x = 0; x < W; x++) if (col[x] > maxc) maxc = col[x];
+    double tc = maxc * 0.20; // Lower threshold to capture the full grid width but ignore noise
+
+    int best_lx = 0, best_rx = W - 1;
+    int max_width = 0;
+    
+    int cur_start = -1;
+    for (int x = 0; x < W; x++) {
+        if (col[x] >= tc) {
+            if (cur_start == -1) cur_start = x;
+        } else {
+            if (cur_start != -1) {
+                int width = x - cur_start;
+                if (width > max_width) {
+                    max_width = width;
+                    best_lx = cur_start;
+                    best_rx = x - 1;
+                }
+                cur_start = -1;
+            }
+        }
+    }
+    // Check last horizontal segment
+    if (cur_start != -1) {
+        int width = W - cur_start;
+         if (width > max_width) {
+            max_width = width;
+            best_lx = cur_start;
+            best_rx = W - 1;
+        }
+    }
+    
+    // 2. VERTICAL SEGMENTATION (Same logic for rows)
+    double maxr = 0.0;
     for (int y = 0; y < H; y++) if (row[y] > maxr) maxr = row[y];
+    double tr = maxr * 0.20;
 
-    double tc = maxc * 0.35;
-    double tr = maxr * 0.35;
-
-    int lx = 0, rx = W - 1, ty = 0, by = H - 1;
-    while (lx < W && col[lx] < tc) lx++;
-    while (rx >= 0 && col[rx] < tc) rx--;
-    while (ty < H && row[ty] < tr) ty++;
-    while (by >= 0 && row[by] < tr) by--;
+    int best_ty = 0, best_by = H - 1;
+    int max_height = 0;
+    int cur_start_y = -1;
+    
+    for (int y = 0; y < H; y++) {
+        if (row[y] >= tr) {
+             if (cur_start_y == -1) cur_start_y = y;
+        } else {
+            if (cur_start_y != -1) {
+                int h_seg = y - cur_start_y;
+                if (h_seg > max_height) {
+                    max_height = h_seg;
+                    best_ty = cur_start_y;
+                    best_by = y - 1;
+                }
+                cur_start_y = -1;
+            }
+        }
+    }
+    // Check last vertical segment
+    if (cur_start_y != -1) {
+        int h_seg = H - cur_start_y;
+        if (h_seg > max_height) {
+             max_height = h_seg;
+             best_ty = cur_start_y;
+             best_by = H - 1;
+        }
+    }
 
     g_free(col);
     g_free(row);
 
-    if (lx >= rx || ty >= by) return 0;
-    *x0 = lx; *x1 = rx; *y0 = ty; *y1 = by;
+    // Apply results
+    *x0 = best_lx; *x1 = best_rx; 
+    *y0 = best_ty; *y1 = best_by;
+    
+    if (*x1 <= *x0 || *y1 <= *y0) return 0;
     return 1;
 }
 
