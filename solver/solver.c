@@ -1,134 +1,106 @@
 #include <stdio.h>
 #include <string.h>
+#include "solver.h" // Toujours inclure le header correspondant
 
-#define MAX 100 
+// MAX_MAT est défini dans solver.h
 
-int CreaMatrice(const char *Fichier , char matrice[100][100])
+int CreaMatrice(const char *Fichier , char matrice[MAX_MAT][MAX_MAT])
 {
     FILE *f = fopen(Fichier, "r");
     if(f == NULL)
     {
-        printf("impossible d ouvrire le fichier");
+        printf("Erreur : Impossible d'ouvrir le fichier %s\n", Fichier);
         return 0;
     } 
     int ligne = 0;
-    char ligneM[MAX];
+    char ligneM[MAX_MAT];
 
-    while (fgets(ligneM, sizeof(ligneM), f))//select line  in document f 
+    while (fgets(ligneM, sizeof(ligneM), f) && ligne < MAX_MAT)
     {
-        ligneM[strcspn(ligneM,"\n")] = '\0'; //supp \n in the line 
-        if(strlen(ligneM)==0)
-        {
-            continue;
-        }
-        strcpy(matrice[ligne], ligneM); //copy the line in mat 
+        ligneM[strcspn(ligneM,"\n")] = '\0'; 
+        if(strlen(ligneM)==0) continue;
+        strcpy(matrice[ligne], ligneM); 
         ligne++;
     }
     
     fclose(f);
-
     return ligne;
-
 }
 
-int ChercheMot(const char *mot, char matrice[MAX][MAX], int nbLignes, int nbColonnes,
+int ChercheMot(const char *mot, char matrice[MAX_MAT][MAX_MAT], int nbLignes, int nbColonnes,
                int *ligneDebut, int *colDebut, int *ligneFin, int *colFin)
 {
     int len = strlen(mot);
-
-    
+    // 8 directions
     int directions[8][2] = {
-        {0, 1},   
-        {0, -1},  
-        {1, 0},   
-        {-1, 0},  
-        {1, 1},   
-        {1, -1},  
-        {-1, 1},  
-        {-1, -1}  
-    }; // all direction in mat
+        {0, 1}, {0, -1}, {1, 0}, {-1, 0}, 
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+    };
 
-    for (int i = 0; i < nbLignes; i++)
-    {
-        for (int j = 0; j < nbColonnes; j++)
-        {
-            if (matrice[i][j] == mot[0])
-            {
-                for (int d = 0; d < 8; d++)
-                {
-                    int dx = directions[d][0];
-                    int dy = directions[d][1];
-                    int x = i, y = j;
-                    int k;
+    for (int i = 0; i < nbLignes; i++) {
+        for (int j = 0; j < nbColonnes; j++) {
+            if (matrice[i][j] != mot[0]) continue;
 
-                    for (k = 1; k < len; k++)
-                    {
-                        x += dx;
-                        y += dy;
+            for (int d = 0; d < 8; d++) {
+                int k, x = i, y = j;
+                for (k = 1; k < len; k++) {
+                    x += directions[d][0];
+                    y += directions[d][1];
 
-                        if (x < 0 || x >= nbLignes || y < 0 || y >= nbColonnes)
-                            break;
-
-                        if (matrice[x][y] != mot[k])
-                            break;
-                    }
-
-                    if (k == len)
-                    {
-                        *ligneDebut = i;
-                        *colDebut = j;
-                        *ligneFin = x;
-                        *colFin = y;
-                        return 1;
-                    }
+                    if (x < 0 || x >= nbLignes || y < 0 || y >= nbColonnes) break;
+                    if (matrice[x][y] != mot[k]) break;
+                }
+                if (k == len) {
+                    *ligneDebut = i; *colDebut = j;
+                    *ligneFin = x; *colFin = y;
+                    return 1;
                 }
             }
         }
     }
-
-    return 0; // word not found
+    return 0;
 }
 
-void ConvertirMajuscules(char *mot)//toUP
+void ConvertirMajuscules(char *mot)
 {
-    for (int i = 0; mot[i] != '\0'; i++)
-    {
-        if (mot[i] >= 'a' && mot[i] <= 'z')
-        {
+    for (int i = 0; mot[i] != '\0'; i++) {
+        if (mot[i] >= 'a' && mot[i] <= 'z') {
             mot[i] = mot[i] - 32;
         }
     }
 }
 
-
-void solver_test(int argc, char *argv[]) // this part call all fonction of the solver and print the final result
+void solver_test(int argc, char *argv[]) 
 {
-    if (argc != 3)
+    // Le main passera (argc-1) et &argv[1].
+    // Donc argv[0] sera "solver", argv[1] le fichier, argv[2] le mot.
+    if (argc < 3)
     {
-        printf("il manque des argument");
-        
+        printf("Usage: ./ocr solver <grille.txt> <mot>\n");
+        return;
     }   
 
-    char matrice[MAX][MAX];
+    char matrice[MAX_MAT][MAX_MAT];
     int nbLignes = CreaMatrice(argv[1], matrice);
+    if (nbLignes == 0) return;
+
     int nbColonnes = strlen(matrice[0]); 
-    ConvertirMajuscules(argv[2]);
-
-    int li1 = -1;
-    int li2 = -1;
-    int co1 = -1;
-    int co2 = -1;
-
-    if (ChercheMot(argv[2], matrice, nbLignes, nbColonnes, &li1, &co1, &li2, &co2))
-    {
-       
-        printf("(%d,%d)(%d,%d)\n", co1, li1,co2 ,li2);//print the position
     
-    }
-    else
-    {
-        printf("Not found\n");
-    }
+    // Attention: argv[2] est le mot. 
+    // On copie le mot pour pouvoir le modifier (ConvertirMajuscules) 
+    // car argv peut être en lecture seule selon les systèmes.
+    char mot_a_chercher[100];
+    strncpy(mot_a_chercher, argv[2], 99);
+    mot_a_chercher[99] = '\0';
 
-    
+    ConvertirMajuscules(mot_a_chercher);
+
+    int dL, dC, fL, fC;
+    if(ChercheMot(mot_a_chercher, matrice, nbLignes, nbColonnes, &dL, &dC, &fL, &fC))
+    {
+        printf("Mot TROUVÉ de (%d,%d) à (%d,%d)\n", dL, dC, fL, fC);
+    }
+    else {
+        printf("Mot NON trouvé.\n");
+    }
 }

@@ -969,7 +969,9 @@ void detect_letters_in_grid(GdkPixbuf *img, GdkPixbuf *disp,
                             guint8 R, guint8 G, guint8 B)
 {
     (void)black_thr;
-
+    (void)R; 
+    (void)G; 
+    (void)B;
     int W = gdk_pixbuf_get_width(img);
     int H = gdk_pixbuf_get_height(img);
 

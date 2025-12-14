@@ -12,6 +12,15 @@
 #define LETTER_TARGET_W 48
 #define LETTER_TARGET_H 48
 
+// Prototypes internes
+static double* row_ratio_band(GdkPixbuf *img, guint8 thr, int x0, int x1);
+static int maybe_split_and_save_letter_word(GdkPixbuf *img, GdkPixbuf *disp,
+                                            int rx0,int ry0,int rx1,int ry1,
+                                            guint8 black_thr,
+                                            guint8 R,guint8 G,guint8 B,
+                                            const char *word_dir,
+                                            int letter_idx);
+
 static inline int clampi(int v,int lo,int hi){ return (v<lo)?lo:((v>hi)?hi:v); }
 
 static inline int get_gray(GdkPixbuf *img, int x, int y)

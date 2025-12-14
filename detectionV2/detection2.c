@@ -7,6 +7,8 @@
 #include <string.h>
 #include "detection.h"
 #include "networks.h"
+
+// Gestion des conflits de macro MAX avec solver.h / glib
 #ifdef MAX
 #undef MAX
 #endif
@@ -411,7 +413,7 @@ static int solve_words_in_grid(const char *root_dir,
     char *grid_path = g_build_filename(root_dir, "GRIDL", NULL);
     char *words_path = g_build_filename(root_dir, "GRIDWO", NULL);
 
-    char matrice[MAX][MAX];
+    char matrice[MAX_MAT][MAX_MAT]; // Updated to MAX_MAT
     int nbLignes = CreaMatrice(grid_path, matrice);
     if (nbLignes <= 0) {
         g_printerr("[Error] Lecture GRIDL echouee (%s)\n", grid_path);
