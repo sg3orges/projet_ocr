@@ -457,176 +457,139 @@ static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1);
 
 static void show_solver_overlay(const GPtrArray *results, int nb_rows, int nb_cols)
 {
-    if (!g_last_image_path) {
-        g_printerr("[Warn] Aucune image de detection disponible pour l'overlay.\n");
-        return;
-    }
+    if (!g_last_image_path) return;
+    
     GError *err = NULL;
     GdkPixbuf *img = gdk_pixbuf_new_from_file(g_last_image_path, &err);
-    if (!img) {
-        g_printerr("[Warn] Impossible de charger l'image pour l'overlay (%s): %s\n", g_last_image_path, err->message);
-        g_clear_error(&err);
-        return;
+    if (!img) { 
+        g_printerr("[Error] Overlay impossible: %s\n", err->message);
+        g_clear_error(&err); 
+        return; 
     }
     GdkPixbuf *disp = gdk_pixbuf_copy(img);
 
-    char *root_dir = find_project_root();
-    GPtrArray *cell_positions = load_cell_positions(root_dir);
-
-    int x0=0, y0=0, x1=0, y1=0;
+    int gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
     if (g_grid_bbox_set) {
-        x0 = g_grid_x0; y0 = g_grid_y0; x1 = g_grid_x1; y1 = g_grid_y1;
-    } else if (!detect_grid_bbox(img, &x0, &y0, &x1, &y1)) {
-        x0 = 0; y0 = 0; x1 = gdk_pixbuf_get_width(img) - 1; y1 = gdk_pixbuf_get_height(img) - 1;
+        gx0 = g_grid_x0; gy0 = g_grid_y0; gx1 = g_grid_x1; gy1 = g_grid_y1;
+    } else {
+        gx0 = 0; gy0 = 0; gx1 = gdk_pixbuf_get_width(img) - 1; gy1 = gdk_pixbuf_get_height(img) - 1;
     }
-    int W = x1 - x0 + 1;
-    int H = y1 - y0 + 1;
-    double stepX = (nb_cols > 0) ? (double)W / (double)nb_cols : 48.0;
-    double stepY = (nb_rows > 0) ? (double)H / (double)nb_rows : 48.0;
-    double insetX = stepX * 0.20;
-    double insetY = stepY * 0.20;
+    
+    int corrected_x0 = gx0, corrected_x1 = gx1;
+    int corrected_y0 = gy0, corrected_y1 = gy1;
+    const int threshold = 160; 
+    
+    for (int y = gy0; y <= gy1; y++) {
+        int ink = 0;
+        for (int x = gx0; x <= gx1; x++) {
+            if (get_gray_local(img, x, y) < threshold) ink++;
+        }
+        if (ink > (gx1 - gx0) * 0.02) { corrected_y0 = y; break; }
+    }
+
+    for (int y = gy1; y >= corrected_y0; y--) {
+        int ink = 0;
+        for (int x = gx0; x <= gx1; x++) {
+            if (get_gray_local(img, x, y) < threshold) ink++;
+        }
+        if (ink > (gx1 - gx0) * 0.02) { corrected_y1 = y; break; }
+    }
+
+    for (int x = gx0; x <= gx1; x++) {
+        int ink = 0;
+        for (int y = corrected_y0; y <= corrected_y1; y++) {
+            if (get_gray_local(img, x, y) < threshold) ink++;
+        }
+        if (ink > 5) { corrected_x0 = x; break; }
+    }
+
+    for (int x = gx1; x >= corrected_x0; x--) {
+        int ink = 0;
+        for (int y = corrected_y0; y <= corrected_y1; y++) {
+            if (get_gray_local(img, x, y) < threshold) ink++;
+        }
+        if (ink > 5) { corrected_x1 = x; break; }
+    }
+
+    double final_w = (double)(corrected_x1 - corrected_x0);
+    double final_h = (double)(corrected_y1 - corrected_y0);
+    
+    if (nb_cols < 1) nb_cols = 1;
+    if (nb_rows < 1) nb_rows = 1;
+
+    double cell_w = final_w / (double)nb_cols;
+    double cell_h = final_h / (double)nb_rows;
+
+    const double BOX_SCALE = 0.80; 
+    const int LINE_WIDTH = 3; 
+
+    double half_thick = (cell_w < cell_h ? cell_w : cell_h) * 0.5 * BOX_SCALE;
+    double half_long  = (cell_w > cell_h ? cell_w : cell_h) * 0.5 * 0.95; 
 
     for (guint i = 0; i < results->len; i++) {
         SolveResult *sr = g_ptr_array_index((GPtrArray *)results, i);
         if (!sr->found) continue;
 
-        int len = (sr->word) ? (int)strlen(sr->word) : 0;
-        int dc = (sr->c2 > sr->c1) ? 1 : (sr->c2 < sr->c1 ? -1 : 0);
-        int dr = (sr->r2 > sr->r1) ? 1 : (sr->r2 < sr->r1 ? -1 : 0);
-        if (len <= 0) {
-            len = abs(sr->c2 - sr->c1) + abs(sr->r2 - sr->r1) + 1;
-        }
-
         WordColor col = word_color_for_index((int)i);
 
-        // --- NOUVEAU : Encadrement du mot entier (Rectangle Oriente) ---
+        double cx_start = corrected_x0 + ((double)sr->c1 + 0.5) * cell_w;
+        double cy_start = corrected_y0 + ((double)sr->r1 + 0.5) * cell_h;
 
-        // 1. Trouver les coordonnees du DEBUT et de la FIN du mot
-        int c_start = sr->c1, r_start = sr->r1;
-        int c_end   = sr->c2, r_end   = sr->r2;
+        double cx_end   = corrected_x0 + ((double)sr->c2 + 0.5) * cell_w;
+        double cy_end   = corrected_y0 + ((double)sr->r2 + 0.5) * cell_h;
 
-        int sx0=0, sy0=0, sx1=0, sy1=0; // Start Cell Box
-        int ex0=0, ey0=0, ex1=0, ey1=0; // End Cell Box
+        double vx = cx_end - cx_start;
+        double vy = cy_end - cy_start;
+        double len = sqrt(vx*vx + vy*vy);
+        if (len < 0.1) { vx = 1.0; vy = 0.0; len = 1.0; }
 
-        // Helper pour recuperer la boite d'une cellule (soit via CELLPOS, soit calcul approximatif)
-        // Inlined for C compatibility
-        
-        // START CELL
-        {
-             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_start, r_start) : NULL;
-             if (cb) {
-                 sx0 = cb->x0; sy0 = cb->y0; sx1 = cb->x1; sy1 = cb->y1;
-             } else {
-                 sx0 = x0 + (int)llround(c_start * stepX);
-                 sy0 = y0 + (int)llround(r_start * stepY);
-                 sx1 = x0 + (int)llround((c_start + 1) * stepX) - 1;
-                 sy1 = y0 + (int)llround((r_start + 1) * stepY) - 1;
-             }
-        }
-
-        // END CELL
-        {
-             CellBBox *cb = cell_positions ? lookup_cell_bbox(cell_positions, c_end, r_end) : NULL;
-             if (cb) {
-                 ex0 = cb->x0; ey0 = cb->y0; ex1 = cb->x1; ey1 = cb->y1;
-             } else {
-                 ex0 = x0 + (int)llround(c_end * stepX);
-                 ey0 = y0 + (int)llround(r_end * stepY);
-                 ex1 = x0 + (int)llround((c_end + 1) * stepX) - 1;
-                 ey1 = y0 + (int)llround((r_end + 1) * stepY) - 1;
-             }
-        }
-
-        // Centres des cellules de debut et fin
-        double start_cx = (sx0 + sx1) / 2.0;
-        double start_cy = (sy0 + sy1) / 2.0;
-        double end_cx   = (ex0 + ex1) / 2.0;
-        double end_cy   = (ey0 + ey1) / 2.0;
-
-        // Vecteur direction U (Start -> End)
-        double vx = end_cx - start_cx;
-        double vy = end_cy - start_cy;
-        double mag = sqrt(vx*vx + vy*vy);
-        
-        // Si le mot ne fait qu'une lettre, on définit une direction arbitraire (horizontale)
-        if (mag < 1.0) { vx = 1.0; vy = 0.0; mag = 1.0; }
-        
-        double ux = vx / mag;
-        double uy = vy / mag;
-
-        // Vecteur Perpendiculaire V (-uy, ux)
+        double ux = vx / len; 
+        double uy = vy / len; 
         double px = -uy;
         double py = ux;
 
-        // Demi-Largeur (perpendiculaire) et Demi-Longueur (extension)
-        // On se base sur la taille moyenne des cellules concernees
-        double cell_w_avg = ((sx1 - sx0 + 1) + (ex1 - ex0 + 1)) / 2.0;
-        double cell_h_avg = ((sy1 - sy0 + 1) + (ey1 - ey0 + 1)) / 2.0;
-        
-        // ADAPTIVE THICKNESS
-        double base_dim;
-        if (fabs(ux) > fabs(uy)) {      // Horizontal dominant -> width is LENGTH, so thickness depends on HEIGHT
-            base_dim = cell_h_avg;
-        } else if (fabs(uy) > fabs(ux)) { // Vertical dominant -> height is LENGTH, so thickness depends on WIDTH
-            base_dim = cell_w_avg;
-        } else {                          // Diagonal
-            base_dim = (cell_w_avg + cell_h_avg) / 2.0;
-        }
-        double half_thick = base_dim * 0.48; // 48% -> ~96% coverage of the cell dimension
-        
-        // 4 Coins du rectangle oriente
-        // C1 = Start - ExtensionLargeur + Perpendiculaire
-        // C2 = Start - ExtensionLargeur - Perpendiculaire
-        // C3 = End   + ExtensionLargeur + Perpendiculaire
-        // C4 = End   + ExtensionLargeur - Perpendiculaire
-        
-        // On recule un peu le debut et on avance un peu la fin pour bien englober
-        double ext = half_thick * 1.2; 
+        double rad_long = (len / 2.0) + half_long;
+        double rad_wide = half_thick;
 
-        int p1x = (int)(start_cx - ux * ext + px * half_thick);
-        int p1y = (int)(start_cy - uy * ext + py * half_thick);
-        
-        int p2x = (int)(start_cx - ux * ext - px * half_thick);
-        int p2y = (int)(start_cy - uy * ext - py * half_thick);
+        double mid_x = (cx_start + cx_end) / 2.0;
+        double mid_y = (cy_start + cy_end) / 2.0;
 
-        int p3x = (int)(end_cx + ux * ext + px * half_thick);
-        int p3y = (int)(end_cy + uy * ext + py * half_thick);
+        int p1x = (int)(mid_x - ux * rad_long + px * rad_wide);
+        int p1y = (int)(mid_y - uy * rad_long + py * rad_wide);
+        int p2x = (int)(mid_x - ux * rad_long - px * rad_wide);
+        int p2y = (int)(mid_y - uy * rad_long - py * rad_wide);
+        int p3x = (int)(mid_x + ux * rad_long + px * rad_wide);
+        int p3y = (int)(mid_y + uy * rad_long + py * rad_wide);
+        int p4x = (int)(mid_x + ux * rad_long - px * rad_wide);
+        int p4y = (int)(mid_y + uy * rad_long - py * rad_wide);
 
-        int p4x = (int)(end_cx + ux * ext - px * half_thick);
-        int p4y = (int)(end_cy + uy * ext - py * half_thick);
-        
-        // --- SMART REFINEMENT ---
-        // Adjust the box position based on actual ink centroid
-        refine_box_position(img, &p1x, &p1y, &p3x, &p3y, &p4x, &p4y, &p2x, &p2y);
-
-        // Dessin des 4 lignes
-        int th = 3; // Epaisseur du trait
-        draw_line(disp, p1x, p1y, p3x, p3y, th, col.r, col.g, col.b); // Haut
-        draw_line(disp, p3x, p3y, p4x, p4y, th, col.r, col.g, col.b); // Droite
-        draw_line(disp, p4x, p4y, p2x, p2y, th, col.r, col.g, col.b); // Bas
-        draw_line(disp, p2x, p2y, p1x, p1y, th, col.r, col.g, col.b); // Gauche
+        draw_line(disp, p1x, p1y, p3x, p3y, LINE_WIDTH, col.r, col.g, col.b);
+        draw_line(disp, p3x, p3y, p4x, p4y, LINE_WIDTH, col.r, col.g, col.b);
+        draw_line(disp, p4x, p4y, p2x, p2y, LINE_WIDTH, col.r, col.g, col.b);
+        draw_line(disp, p2x, p2y, p1x, p1y, LINE_WIDTH, col.r, col.g, col.b);
     }
 
+    // Affichage Fenêtre
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(win), "Solutions (overlay)");
-    gtk_window_set_default_size(GTK_WINDOW(win), gdk_pixbuf_get_width(disp), gdk_pixbuf_get_height(disp));
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_window_set_title(GTK_WINDOW(win), "Solution (Auto-Correction)");
+    gtk_window_set_default_size(GTK_WINDOW(win), MIN(gdk_pixbuf_get_width(disp), 1200), MIN(gdk_pixbuf_get_height(disp), 900));
+    
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(win), box);
-
+    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
     GtkWidget *imgw = gtk_image_new_from_pixbuf(disp);
-    gtk_box_pack_start(GTK_BOX(box), imgw, TRUE, TRUE, 0);
-
+    gtk_container_add(GTK_CONTAINER(scroll), imgw);
     GtkWidget *btn_close = gtk_button_new_with_label("Fermer");
-    gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 4);
+    gtk_box_pack_start(GTK_BOX(box), btn_close, FALSE, FALSE, 5);
     g_signal_connect(btn_close, "clicked", G_CALLBACK(on_overlay_close), NULL);
 
     gtk_widget_show_all(win);
 
     g_object_unref(img);
     g_object_unref(disp);
-
-    if (cell_positions) g_ptr_array_free(cell_positions, TRUE);
-    g_free(root_dir);
+    char *rd = find_project_root();
+    if(rd) g_free(rd);
 }
 
 static int detect_grid_bbox(GdkPixbuf *img, int *x0, int *y0, int *x1, int *y1)
