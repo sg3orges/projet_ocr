@@ -124,7 +124,7 @@ static void on_image_clicked(GtkButton *button, gpointer user_data)
             if (err) g_error_free(err);
         }
 
-        int row = (int)(i / columns) * 2; // row for image, next row for button
+        int row = (int)(i / columns) * 2; 
         int col = (int)(i % columns);
         gtk_grid_attach(GTK_GRID(grid), img_widget, col, row, 1, 1);
 
